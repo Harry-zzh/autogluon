@@ -75,6 +75,7 @@ from ..constants import (
 )
 from .losses import BBCEWithLogitLoss, FocalLoss, MultiNegativesSoftmaxLoss, SoftTargetCrossEntropy, StructureLoss
 from .lr_scheduler import (
+    get_constant_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
     get_polynomial_decay_schedule_with_warmup,
@@ -440,6 +441,11 @@ def get_lr_scheduler(
             optimizer=optimizer,
             num_warmup_steps=num_warmup_steps,
             num_training_steps=num_max_steps,
+        )
+    elif lr_schedule == "constant":
+        scheduler = get_constant_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=num_warmup_steps,
         )
     else:
         raise ValueError(f"unknown lr schedule: {lr_schedule}")

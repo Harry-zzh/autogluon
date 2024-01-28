@@ -1097,6 +1097,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         is_train=True,
     ):
         if is_train:
+            gradient_clip_val=OmegaConf.select(config, "optimization.gradient_clip_val", default=1)
+            if gradient_clip_val == "None":
+                gradient_clip_val = None
             blacklist_msgs = ["already configured with model summary"]
             log_filter = LogFilter(blacklist_msgs)
             with apply_log_filter(log_filter):
@@ -1113,7 +1116,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                     max_time=max_time,
                     callbacks=callbacks,
                     logger=tb_logger,
-                    gradient_clip_val=OmegaConf.select(config, "optimization.gradient_clip_val", default=1),
+                    gradient_clip_val=gradient_clip_val,
                     gradient_clip_algorithm=OmegaConf.select(
                         config, "optimization.gradient_clip_algorithm", default="norm"
                     ),
