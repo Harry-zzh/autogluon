@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from typing import List, Optional
@@ -8,7 +9,9 @@ from torch import Tensor, nn
 from ..constants import CATEGORICAL, FEATURES, LABEL, LOGITS, NUMERICAL
 from .custom_transformer import CLSToken, Custom_Transformer, _TokenInitialization
 from .utils import init_weights
+from .utils import assign_layer_ids
 
+logger = logging.getLogger(__name__)
 
 class CategoricalFeatureTokenizer(nn.Module):
     """
@@ -699,8 +702,34 @@ class FT_Transformer(nn.Module):
         -------
         A dictionary mapping the layer names (keys) to their ids (values).
         """
-        name_to_id = {}
-        for n, _ in self.named_parameters():
+        # name_to_id = {}
+
+        # for n, _ in self.named_parameters():
+        #     name_to_id[n] = 0
+
+        # return name_to_id
+    
+
+        model_prefix = None
+        pre_encoder_patterns = (
+            "numerical",
+            "cls_token",
+        )
+
+        post_encoder_patterns = ("head", )
+        names = [n for n, _ in self.named_parameters()]
+
+        name_to_id, names = assign_layer_ids(
+            names=names,
+            pre_encoder_patterns=pre_encoder_patterns,
+            post_encoder_patterns=post_encoder_patterns,
+            model_pre=model_prefix,
+        )
+        if len(names) > 0:
+            logger.debug(f"outer layers are treated as head: {names}")
+        for n in names:
+            assert n not in name_to_id
             name_to_id[n] = 0
 
         return name_to_id
+
