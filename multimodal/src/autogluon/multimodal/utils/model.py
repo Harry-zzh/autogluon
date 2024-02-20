@@ -18,6 +18,7 @@ from ..constants import (
     DOCUMENT_TRANSFORMER,
     FT_TRANSFORMER,
     FUSION_MLP,
+    FUSION_METATRANSFORMER,
     FUSION_NER,
     FUSION_TRANSFORMER,
     HF_TEXT,
@@ -52,6 +53,7 @@ from ..models import (
     MultimodalFusionMLP,
     MultimodalFusionNER,
     MultimodalFusionTransformer,
+    MultimodalMetaTransformer,
     NumericalMLP,
     SAMForSemanticSegmentation,
     TFewModel,
@@ -202,6 +204,7 @@ def create_model(
             num_classes=num_classes,
             mix_choice=model_config.mix_choice,
             pretrained=pretrained,
+            early_fusion=model_config.early_fusion
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
@@ -214,6 +217,7 @@ def create_model(
             pretrained=pretrained,
             tokenizer_name=model_config.tokenizer_name,
             use_fast=OmegaConf.select(model_config, "use_fast", default=True),
+            early_fusion=model_config.early_fusion
         )
     elif model_name.lower().startswith(T_FEW):
         model = TFewModel(
@@ -306,6 +310,39 @@ def create_model(
             normalization=model_config.normalization,
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
         )
+    elif model_name.lower().startswith(FUSION_METATRANSFORMER):
+        # model = functools.partial(
+        #     MultimodalMetaTransformer,
+        #     prefix=model_name,
+        #     hidden_features=model_config.hidden_sizes,
+        #     num_classes=num_classes,
+        #     adapt_in_features=model_config.adapt_in_features,
+        #     activation=model_config.activation,
+        #     dropout_prob=model_config.drop_rate,
+        #     normalization=model_config.normalization,
+        #     loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
+        # )
+        model = functools.partial(
+            MultimodalMetaTransformer,
+            prefix=model_name,
+            hidden_features=model_config.hidden_size,
+            num_classes=num_classes,
+            n_blocks=model_config.n_blocks,
+            attention_n_heads=model_config.attention_n_heads,
+            ffn_d_hidden=model_config.ffn_d_hidden,
+            attention_dropout=model_config.attention_dropout,
+            residual_dropout=model_config.residual_dropout,
+            ffn_dropout=model_config.ffn_dropout,
+            attention_normalization=model_config.normalization,
+            ffn_normalization=model_config.normalization,
+            head_normalization=model_config.normalization,
+            ffn_activation=model_config.ffn_activation,
+            head_activation=model_config.head_activation,
+            adapt_in_features=model_config.adapt_in_features,
+            loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
+            additive_attention=OmegaConf.select(model_config, "additive_attention", default=False),
+            share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
+        )
     elif model_name.lower().startswith(FUSION_NER):
         model = functools.partial(
             MultimodalFusionNER,
@@ -366,6 +403,7 @@ def create_model(
             pooling_mode=OmegaConf.select(model_config, "pooling_mode", default="cls"),
             checkpoint_name=model_config.checkpoint_name,
             pretrained=pretrained,
+            early_fusion=model_config.early_fusion
         )
     elif model_name.lower().startswith(SAM):
         model = SAMForSemanticSegmentation(
