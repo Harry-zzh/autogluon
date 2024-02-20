@@ -8,6 +8,7 @@ from .fusion import (
     MultimodalFusionMLP,
     MultimodalFusionNER,
     MultimodalFusionTransformer,
+    MultimodalMetaTransformer
 )
 from .huggingface_text import HFAutoModelForTextPrediction
 from .mmdet_image import MMDetAutoModelForObjectDetection

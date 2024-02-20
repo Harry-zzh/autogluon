@@ -39,6 +39,11 @@ model:
       - "random_delete(0.05)"        # less than 0.1 based on eda paper
       - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       - "insert_punc(0.05)"
+      # - "random_swap(0.05)"          # less than 0.1 based on eda paper
+      # - "random_delete(0.05)"        # less than 0.1 based on eda paper
+      # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
+      # - "insert_punc(0.05)"
+    early_fusion: False
   ner_text:
     checkpoint_name: "bert-base-cased"
     max_text_len: 512
@@ -75,6 +80,7 @@ model:
     stochastic_chunk: False
     text_aug_detect_length: 10                # We perform text augmentation only if a text has more than text_detection_length words. It is used to differentiate text columns versus tabular columns that are treated as text.
     text_trivial_aug_maxscale: 0.0            # augmentation magnitude randomly drawn from [0, text_trivial_aug_maxscale]
+    early_fusion: False
   t_few:
     checkpoint_name: "t5-small" #"bigscience/T0_3B"
     gradient_checkpointing: False
@@ -106,6 +112,7 @@ model:
     image_norm: "imagenet"
     image_size: null
     max_img_num_per_col: 2
+    early_fusion: False
 
   mmdet_image:
     checkpoint_name: "yolov3_mobilenetv2_8xb24-320-300e_coco"
@@ -190,7 +197,33 @@ model:
     activation: "leaky_relu"
     drop_rate: 0.1
     normalization: "layer_norm"
+    early_fusion: False
     data_types:
+  fusion_metatransformer:
+    # weight: 0.1
+    # adapt_in_features: "max"
+    # hidden_sizes:
+    #   - 128
+    # activation: "leaky_relu"
+    # drop_rate: 0.1
+    # normalization: "layer_norm"
+    # early_fusion: False
+    # data_types:
+    hidden_size: 192
+    n_blocks: 3
+    attention_n_heads: 8
+    adapt_in_features: "max"
+    attention_dropout: 0.2
+    residual_dropout: 0.0
+    ffn_dropout: 0.1
+    ffn_d_hidden: 192
+    normalization: "layer_norm"
+    ffn_activation: "geglu"
+    head_activation: "relu"
+    data_types:
+    additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
+    share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
+    early_fusion: False
   fusion_ner:
     weight:
     adapt_in_features: "max"
@@ -215,6 +248,7 @@ model:
     data_types:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
+    early_fusion: False
   ft_transformer:
     data_types:
       - "categorical"
@@ -238,6 +272,7 @@ model:
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     pooling_mode: "cls"
     checkpoint_name: null
+    early_fusion: False
 
   sam:
     checkpoint_name: "facebook/sam-vit-huge"

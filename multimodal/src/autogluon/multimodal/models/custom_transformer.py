@@ -475,7 +475,7 @@ class Custom_Transformer(nn.Module):
             self.linear = nn.Linear(d_in, d_out, bias)
 
         def forward(self, x: Tensor) -> Tensor:
-            x = x[:, -1]
+            x = x[:, -1] # get cls token
             x = self.normalization(x)
             x = self.activation(x)
             x = self.linear(x)
