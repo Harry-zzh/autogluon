@@ -464,6 +464,7 @@ class FT_Transformer(nn.Module):
         pooling_mode: Optional[str] = "cls",
         checkpoint_name: str = None,
         pretrained: bool = False,
+        early_fusion: bool = False,
     ) -> None:
         """
         Parameters
@@ -543,6 +544,8 @@ class FT_Transformer(nn.Module):
 
         self.categorical_feature_tokenizer = None
         self.numerical_feature_tokenizer = None
+        self.early_fusion = early_fusion
+
 
         if num_categories:
             self.num_categories = num_categories
@@ -562,39 +565,40 @@ class FT_Transformer(nn.Module):
             )
             self.numerical_adapter = nn.Linear(token_dim, hidden_size)
 
-        self.transformer = Custom_Transformer(
-            d_token=hidden_size,
-            n_blocks=num_blocks,
-            attention_n_heads=attention_n_heads,
-            attention_dropout=attention_dropout,
-            attention_initialization=attention_initialization,
-            attention_normalization=attention_normalization,
-            ffn_d_hidden=ffn_hidden_size,
-            ffn_dropout=ffn_dropout,
-            ffn_activation=ffn_activation,
-            ffn_normalization=ffn_normalization,
-            residual_dropout=residual_dropout,
-            prenormalization=prenormalization,
-            first_prenormalization=first_prenormalization,
-            last_layer_query_idx=None,
-            n_tokens=None,
-            kv_compression_ratio=kv_compression_ratio,
-            kv_compression_sharing=kv_compression_sharing,
-            head_activation=head_activation,
-            head_normalization=head_normalization,
-            d_out=hidden_features,
-            projection=False,
-            additive_attention=additive_attention,
-            share_qv_weights=share_qv_weights,
-        )
+        if not early_fusion:
+            self.transformer = Custom_Transformer(
+                d_token=hidden_size,
+                n_blocks=num_blocks,
+                attention_n_heads=attention_n_heads,
+                attention_dropout=attention_dropout,
+                attention_initialization=attention_initialization,
+                attention_normalization=attention_normalization,
+                ffn_d_hidden=ffn_hidden_size,
+                ffn_dropout=ffn_dropout,
+                ffn_activation=ffn_activation,
+                ffn_normalization=ffn_normalization,
+                residual_dropout=residual_dropout,
+                prenormalization=prenormalization,
+                first_prenormalization=first_prenormalization,
+                last_layer_query_idx=None,
+                n_tokens=None,
+                kv_compression_ratio=kv_compression_ratio,
+                kv_compression_sharing=kv_compression_sharing,
+                head_activation=head_activation,
+                head_normalization=head_normalization,
+                d_out=hidden_features,
+                projection=False,
+                additive_attention=additive_attention,
+                share_qv_weights=share_qv_weights,
+            )
 
-        self.head = Custom_Transformer.Head(
-            d_in=hidden_size,
-            d_out=num_classes,
-            bias=True,
-            activation=head_activation,
-            normalization=head_normalization,
-        )
+            self.head = Custom_Transformer.Head(
+                d_in=hidden_size,
+                d_out=num_classes,
+                bias=True,
+                activation=head_activation,
+                normalization=head_normalization,
+            )
 
         self.cls_token = CLSToken(
             d_token=hidden_size,
@@ -606,7 +610,9 @@ class FT_Transformer(nn.Module):
             self.numerical_adapter.apply(init_weights)
         if self.categorical_feature_tokenizer:
             self.categorical_adapter.apply(init_weights)
-        self.head.apply(init_weights)
+        
+        if not early_fusion:
+            self.head.apply(init_weights)
         # init transformer backbone from provided checkpoint
         from autogluon.multimodal.utils.download import download
 
@@ -673,6 +679,14 @@ class FT_Transformer(nn.Module):
 
         multimodal_features = torch.cat(multimodal_features, dim=1)
         multimodal_features = self.cls_token(multimodal_features)
+
+        if self.early_fusion:
+            return {
+                self.prefix: {
+                    FEATURES: multimodal_features,
+                }
+            }
+
         features = self.transformer(multimodal_features)
         logits = self.head(features)
 

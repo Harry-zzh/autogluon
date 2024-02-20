@@ -49,6 +49,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         pretrained: Optional[bool] = True,
         tokenizer_name: Optional[str] = "hf_auto",
         use_fast: Optional[bool] = True,
+        early_fusion: bool = False,
     ):
         """
         Load a pretrained huggingface text transformer backbone.
@@ -91,6 +92,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         logger.debug(f"initializing {checkpoint_name}")
         self.checkpoint_name = checkpoint_name
         self.num_classes = num_classes
+        self.early_fusion = early_fusion
 
         self.config, self.model = get_hf_config_and_model(
             checkpoint_name=checkpoint_name, pretrained=pretrained, low_cpu_mem_usage=low_cpu_mem_usage
@@ -117,8 +119,9 @@ class HFAutoModelForTextPrediction(nn.Module):
 
         self.out_features = self.model.config.hidden_size
 
-        self.head = nn.Linear(self.out_features, num_classes) if num_classes else nn.Identity()
-        self.head.apply(init_weights)
+        if not early_fusion:
+            self.head = nn.Linear(self.out_features, num_classes) if num_classes else nn.Identity()
+            self.head.apply(init_weights)
 
         self.prefix = prefix
         self.pooling_mode = pooling_mode
@@ -131,6 +134,11 @@ class HFAutoModelForTextPrediction(nn.Module):
             self.disable_seg_ids = True
         else:
             self.disable_seg_ids = False
+
+        if early_fusion:
+            for n, p in self.model.named_parameters():
+                if "embed" not in n:
+                    p.requires_grad = False
 
     @property
     def text_token_ids_key(self):
@@ -192,67 +200,114 @@ class HFAutoModelForTextPrediction(nn.Module):
         steps = torch.arange(0, text_token_ids.shape[1]).type_as(text_valid_length)
         text_masks = (steps.reshape((1, -1)) < text_valid_length.reshape((-1, 1))).type_as(text_token_ids)
 
-        if self.is_t5:
-            # For the T5 model, we will only use the encoder to encode the sentence. This is adopted in
-            # "Sentence-T5 (ST5): Scalable Sentence Encoders from Pre-trained Text-to-Text Models"
-            # (https://aclanthology.org/2022.findings-acl.146.pdf).
-            inputs_embeds = self.model.encoder.embed_tokens(text_token_ids)
-            if self.gradient_checkpointing:
-                # FIXME(?) This is a hack! We added a DummyLayer to ensure that the
-                #  gradient checkpointing will assign output layer as require_grad=True
-                #  Reference: https://discuss.pytorch.org/t/checkpoint-with-no-grad-requiring-inputs-problem/19117/9
-                inputs_embeds = self.dummy_layer(inputs_embeds)
-            outputs = self.model.encoder(
-                inputs_embeds=inputs_embeds,
-                attention_mask=text_masks,
-            )
-        else:
-            if "token_type_ids" in self.tokenizer.model_input_names:
-                outputs = self.model(
-                    input_ids=text_token_ids,
-                    token_type_ids=text_segment_ids,
+        if not self.early_fusion:
+            if self.is_t5:
+                # For the T5 model, we will only use the encoder to encode the sentence. This is adopted in
+                # "Sentence-T5 (ST5): Scalable Sentence Encoders from Pre-trained Text-to-Text Models"
+                # (https://aclanthology.org/2022.findings-acl.146.pdf).
+                inputs_embeds = self.model.encoder.embed_tokens(text_token_ids)
+                if self.gradient_checkpointing:
+                    # FIXME(?) This is a hack! We added a DummyLayer to ensure that the
+                    #  gradient checkpointing will assign output layer as require_grad=True
+                    #  Reference: https://discuss.pytorch.org/t/checkpoint-with-no-grad-requiring-inputs-problem/19117/9
+                    inputs_embeds = self.dummy_layer(inputs_embeds)
+                outputs = self.model.encoder(
+                    inputs_embeds=inputs_embeds,
                     attention_mask=text_masks,
                 )
             else:
-                outputs = self.model(
-                    input_ids=text_token_ids,
-                    attention_mask=text_masks,
+                if "token_type_ids" in self.tokenizer.model_input_names:
+                    outputs = self.model(
+                        input_ids=text_token_ids,
+                        token_type_ids=text_segment_ids,
+                        attention_mask=text_masks,
+                    )
+                else:
+                    outputs = self.model(
+                        input_ids=text_token_ids,
+                        attention_mask=text_masks,
+                    )
+            if self.pooling_mode == "cls":
+                pooled_features = outputs.last_hidden_state[:, 0, :]
+            elif self.pooling_mode == "mean":
+                pooled_features = (outputs.last_hidden_state * text_masks.unsqueeze(-1)).sum(1)
+                sum_mask = text_masks.unsqueeze(-1).sum(1)
+                sum_mask = torch.clamp(sum_mask, min=1e-9)
+                pooled_features = pooled_features / sum_mask
+            else:
+                raise NotImplementedError(f"Pooling mode={self.pooling_mode} is not supported.")
+
+            logits = self.head(pooled_features)
+            last_hidden_state = outputs.last_hidden_state
+
+            batch = {
+                self.text_token_ids_key: text_token_ids,
+                self.text_segment_ids_key: text_segment_ids,
+                self.text_valid_length_key: text_valid_length,
+            }
+            if text_column_names:
+                assert len(text_column_names) == len(text_column_indices), "invalid text column inputs"
+                for idx, name in enumerate(text_column_names):
+                    batch[name] = text_column_indices[idx]
+            column_features, column_feature_masks = get_column_features(
+                batch=batch,
+                column_name_prefix=self.text_column_prefix,
+                features=last_hidden_state,
+                valid_lengths=text_valid_length,
+                cls_feature=pooled_features,
+            )
+
+            if column_features == {} or column_feature_masks == {}:
+                return pooled_features, logits
+            else:
+                return pooled_features, logits, column_features, column_feature_masks
+        else:
+            if self.is_t5:
+                # For the T5 model, we will only use the encoder to encode the sentence. This is adopted in
+                # "Sentence-T5 (ST5): Scalable Sentence Encoders from Pre-trained Text-to-Text Models"
+                # (https://aclanthology.org/2022.findings-acl.146.pdf).
+                inputs_embeds = self.model.encoder.embed_tokens(text_token_ids)
+                if self.gradient_checkpointing:
+                    # FIXME(?) This is a hack! We added a DummyLayer to ensure that the
+                    #  gradient checkpointing will assign output layer as require_grad=True
+                    #  Reference: https://discuss.pytorch.org/t/checkpoint-with-no-grad-requiring-inputs-problem/19117/9
+                    inputs_embeds = self.dummy_layer(inputs_embeds)
+                return inputs_embeds, torch.tensor([])
+            else:
+                input_ids = text_token_ids
+                inputs_embeds = None
+                attention_mask=text_masks
+                position_ids=None
+                if "token_type_ids" in self.tokenizer.model_input_names:
+                    token_type_ids=text_segment_ids
+                else:
+                    token_type_ids=None
+                    
+                if input_ids is not None and inputs_embeds is not None:
+                    raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+                elif input_ids is not None:
+                    input_shape = input_ids.size()
+                elif inputs_embeds is not None:
+                    input_shape = inputs_embeds.size()[:-1]
+                else:
+                    raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+                device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+                if attention_mask is None:
+                    attention_mask = torch.ones(input_shape, device=device)
+                if token_type_ids is None:
+                    token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+
+                embedding_output = self.model.embeddings(
+                    input_ids=input_ids,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    mask=attention_mask,
+                    inputs_embeds=inputs_embeds,
                 )
-        if self.pooling_mode == "cls":
-            pooled_features = outputs.last_hidden_state[:, 0, :]
-        elif self.pooling_mode == "mean":
-            pooled_features = (outputs.last_hidden_state * text_masks.unsqueeze(-1)).sum(1)
-            sum_mask = text_masks.unsqueeze(-1).sum(1)
-            sum_mask = torch.clamp(sum_mask, min=1e-9)
-            pooled_features = pooled_features / sum_mask
-        else:
-            raise NotImplementedError(f"Pooling mode={self.pooling_mode} is not supported.")
-
-        logits = self.head(pooled_features)
-        last_hidden_state = outputs.last_hidden_state
-
-        batch = {
-            self.text_token_ids_key: text_token_ids,
-            self.text_segment_ids_key: text_segment_ids,
-            self.text_valid_length_key: text_valid_length,
-        }
-        if text_column_names:
-            assert len(text_column_names) == len(text_column_indices), "invalid text column inputs"
-            for idx, name in enumerate(text_column_names):
-                batch[name] = text_column_indices[idx]
-        column_features, column_feature_masks = get_column_features(
-            batch=batch,
-            column_name_prefix=self.text_column_prefix,
-            features=last_hidden_state,
-            valid_lengths=text_valid_length,
-            cls_feature=pooled_features,
-        )
-
-        if column_features == {} or column_feature_masks == {}:
-            return pooled_features, logits
-        else:
-            return pooled_features, logits, column_features, column_feature_masks
-
+                return embedding_output, torch.tensor([])
+                    
     def get_output_dict(
         self,
         pooled_features: torch.Tensor,
@@ -260,6 +315,12 @@ class HFAutoModelForTextPrediction(nn.Module):
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
     ):
+        if self.early_fusion:
+            return {
+                self.prefix: {
+                    FEATURES: pooled_features,
+                }
+            }
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
         if column_features != None:
             ret[COLUMN_FEATURES][FEATURES].update(column_features)
