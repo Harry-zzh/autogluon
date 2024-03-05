@@ -8,6 +8,7 @@ from ...constants import AUTOMM, FEATURES, LABEL, LOGITS, WEIGHT
 from ..mlp import MLP
 from ..utils import init_weights, run_model
 from .base import AbstractMultimodalFusionModel
+from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,16 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
 
             self.adapter = nn.ModuleList([nn.Linear(in_feat, base_in_feat) for in_feat in raw_in_features])
 
-            in_features = base_in_feat * len(raw_in_features)
+            # 虽然clip只有一个model，但是是image 和 text的late fusion
+            has_clip = False
+            for model_name in models:
+                if isinstance(model_name, CLIPForImageText_fusionmlp):
+                    has_clip = True
+                    break
+            if has_clip:
+                in_features = base_in_feat * (len(raw_in_features) + 1)
+            else:
+                in_features = base_in_feat * len(raw_in_features)
         else:
             self.adapter = nn.ModuleList([nn.Identity() for _ in range(len(raw_in_features))])
             in_features = sum(raw_in_features)
@@ -157,9 +167,15 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             per_model_args = args[offset : offset + len(per_model.input_keys)]
             batch = dict(zip(per_model.input_keys, per_model_args))
             per_output = run_model(per_model, batch)
-            multimodal_features.append(
-                per_adapter(per_output[per_model.prefix][FEATURES].to(per_adapter.weight.dtype))
-            )
+            if hasattr(per_model, "prefix_dict"): # for CLIP model only
+                for prefix in per_model.prefix_dict:
+                    multimodal_features.append(
+                    per_adapter(per_output[prefix][FEATURES].to(per_adapter.weight.dtype))
+                    )
+            else:
+                multimodal_features.append(
+                    per_adapter(per_output[per_model.prefix][FEATURES].to(per_adapter.weight.dtype))
+                )
             multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)
 

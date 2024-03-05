@@ -31,6 +31,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
         num_classes: Optional[int] = 0,
         mix_choice: Optional[str] = "all_logits",
         pretrained: Optional[bool] = True,
+        early_fusion = False
     ):
         """
         Load a pretrained image backbone from TIMM.
