@@ -14,6 +14,7 @@ from ..constants import (
     CATEGORICAL,
     CATEGORICAL_MLP,
     CLIP,
+    CLIP_FUSION_MLP,
     DOCUMENT,
     DOCUMENT_TRANSFORMER,
     FT_TRANSFORMER,
@@ -42,6 +43,7 @@ from ..constants import (
 from ..data import MultiModalFeaturePreprocessor
 from ..models import (
     CategoricalMLP,
+    CLIPForImageText_fusionmlp,
     CLIPForImageText,
     DocumentTransformer,
     FT_Transformer,
@@ -141,6 +143,13 @@ def select_model(
         selected_model_names.extend(fusion_model_name)
     elif len(fusion_model_name) == 1 and hasattr(config.model, fusion_model_name[0]):
         delattr(config.model, fusion_model_name[0])
+    if "clip_fusion_mlp" in selected_model_names:
+        temp_selected_model_names = []
+        for model_name in selected_model_names:
+            if model_name == "timm_image" or model_name == "hf_text":
+                continue
+            temp_selected_model_names.append(model_name)
+        selected_model_names = temp_selected_model_names
 
     config.model.names = selected_model_names
     logger.debug(f"selected models: {selected_model_names}")
@@ -189,7 +198,15 @@ def create_model(
     -------
     A model.
     """
-    if model_name.lower().startswith(CLIP):
+    if model_name.lower().startswith(CLIP_FUSION_MLP):
+        model = CLIPForImageText_fusionmlp(
+            prefix=model_name,
+            checkpoint_name=model_config.checkpoint_name,
+            num_classes=num_classes,
+            pretrained=pretrained,
+            tokenizer_name=model_config.tokenizer_name,
+        )
+    elif model_name.lower().startswith(CLIP):
         model = CLIPForImageText(
             prefix=model_name,
             checkpoint_name=model_config.checkpoint_name,
@@ -490,7 +507,7 @@ def create_fusion_model(
                 model = apply_model_adaptation(model, config)
             single_models.append(model)
 
-    if len(single_models) > 1:
+    if len(single_models) > 1 or isinstance(single_models[0], CLIPForImageText_fusionmlp) :
         # must have one fusion model if there are multiple independent models
         return fusion_model(models=single_models)
     elif len(single_models) == 1:
