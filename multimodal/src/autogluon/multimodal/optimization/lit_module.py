@@ -412,6 +412,10 @@ class LitModule(pl.LightningModule):
 
         sched = {"scheduler": scheduler, "interval": "step"}
         logger.debug("done configuring optimizer and scheduler")
+
+        for k, v in self.model.named_parameters():
+            if v.requires_grad:
+                print(k)
         return [optimizer], [sched]
 
     def on_before_optimizer_step(self, optimizer):

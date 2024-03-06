@@ -10,7 +10,21 @@ from ..utils import init_weights, run_model
 from .base import AbstractMultimodalFusionModel
 from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 
+from omegaconf import OmegaConf, DictConfig
+from .augment_network import AugmentNetwork
+import torch.nn.functional as F
 logger = logging.getLogger(__name__)
+
+def consist_loss(p_logits, q_logits, threshold):
+    p = F.softmax(p_logits, dim=1)
+    logp = F.log_softmax(p_logits, dim=1)
+    logq = F.log_softmax(q_logits, dim=1)
+    loss = torch.sum(p * (logp - logq), dim=-1)
+    q = F.softmax(q_logits, dim=1)
+    q_largest = torch.max(q, dim=1)[0]
+    loss_mask = torch.gt(q_largest, threshold).float()
+    loss = loss * loss_mask
+    return torch.mean(loss)
 
 
 class MultimodalFusionMLP(AbstractMultimodalFusionModel):
@@ -31,6 +45,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         dropout_prob: Optional[float] = 0.5,
         normalization: Optional[str] = "layer_norm",
         loss_weight: Optional[float] = None,
+        aug_config: Optional[DictConfig] = None,
     ):
         """
         Parameters
@@ -120,6 +135,13 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.fusion_mlp = nn.Sequential(*fusion_mlp)
         # in_features has become the latest hidden size
         self.head = nn.Linear(in_features, num_classes)
+
+        # Initialize Augmentation Network
+        self.augmenter = None
+        self.aug_config = aug_config
+        if aug_config != None and aug_config.turn_on:
+            self.augmenter = self.construct_augnet()
+
         # init weights
         self.adapter.apply(init_weights)
         self.fusion_mlp.apply(init_weights)
@@ -128,6 +150,15 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.out_features = in_features
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
+
+    def construct_augnet(self):
+        model_feature_dict = [
+            (per_model.prefix, per_model.out_features) for per_model in self.model
+        ]
+        return AugmentNetwork(
+            self.aug_config, model_feature_dict, self.adapter_out_dim, len(self.model)
+        )
+
 
     @property
     def input_keys(self):
@@ -178,11 +209,77 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 )
             multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)
+        
+        multimodal_features = torch.cat(multimodal_features, dim=1)
 
-        features = self.fusion_mlp(torch.cat(multimodal_features, dim=1))
+        # pass through augmentation network after adapter
+        aug_loss = None
+
+        if self.training:
+            if self.augmenter is not None:
+                # train augment network
+                aug_loss = {}
+                detached_feature = multimodal_features.detach().clone()  # [8, 512]
+
+                new, m, v = self.augmenter(detached_feature)
+                regularize_loss = self.augmenter.l2_regularize(detached_feature, new)
+                KLD_loss = (
+                    self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
+                )
+
+                with torch.no_grad():
+                    ori_logits = self.head(self.fusion_mlp(detached_feature))
+                aug_logits = self.head(self.fusion_mlp(new))
+                consist_reg = consist_loss(
+                    aug_logits, ori_logits.detach(), self.aug_config.consist_t
+                )
+                aug_loss.update(
+                    {
+                        "consist_loss": consist_reg,
+                        "cons_weight": self.aug_config.consist_loss_weight,
+                        "regularizer": regularize_loss,
+                        "reg_weight": self.aug_config.regularizer_loss_weight,
+                        "KLD_loss": KLD_loss,
+                        "kl_weight": self.aug_config.kl_loss_weight,
+                    }
+                )
+
+                after_augment = new.clone()
+                after_augment.register_hook(
+                    lambda grad: -grad * (self.aug_config.adv_weight)
+                )
+                multimodal_features = torch.cat(
+                    [multimodal_features, after_augment], dim=0
+                )
+
+        # features = self.fusion_mlp(multimodal_features)
+        # logits = self.head(features)
+        # fusion_output = {
+        #     self.prefix: {
+        #         LOGITS: logits,
+        #         FEATURES: features,
+        #     }
+        # }
+        # if self.loss_weight is not None:
+        #     fusion_output[self.prefix].update({WEIGHT: 1})
+        #     output.update(fusion_output)
+        # else:
+        #     output = fusion_output
+
+        # if aug_loss is not None:
+        #     output.update({"augmenter": aug_loss})
+
+        # return output
+    
+        features = self.fusion_mlp(multimodal_features)
         logits = self.head(features)
 
-        return features, logits, multimodal_logits
+
+        if aug_loss is not None:
+            return features, logits, multimodal_logits, aug_loss
+        
+        else:
+             return features, logits, multimodal_logits
 
     def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor]):
         fusion_output = {

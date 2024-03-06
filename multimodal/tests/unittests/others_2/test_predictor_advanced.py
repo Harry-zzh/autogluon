@@ -3,12 +3,12 @@ import shutil
 
 import numpy.testing as npt
 import pytest
-from datasets import load_dataset
 
 from autogluon.multimodal import MultiModalPredictor
 from autogluon.multimodal.constants import BIT_FIT, IA3, IA3_BIAS, IA3_LORA, LORA_BIAS, LORA_NORM, NORM_FIT
 from autogluon.multimodal.models.timm_image import TimmAutoModelForImagePrediction
 from autogluon.multimodal.utils.misc import shopee_dataset
+from datasets import load_dataset
 
 from ..utils.unittest_datasets import AmazonReviewSentimentCrossLingualDataset
 
