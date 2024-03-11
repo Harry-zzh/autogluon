@@ -694,6 +694,8 @@ class FT_Transformer(nn.Module):
             features = features[:, -1, :]
         elif self.pooling_mode == "mean":
             features = features.mean(dim=1)
+        elif self.pooling_mode == "all":
+            features = features
         else:
             raise NotImplementedError(f"Pooling mode={self.pooling_mode} is not supported.")
 

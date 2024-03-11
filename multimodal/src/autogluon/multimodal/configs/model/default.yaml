@@ -227,7 +227,7 @@ model:
     early_fusion: False
     data_types:
     augmenter:
-      turn_on: True
+      turn_on: False
       arch: "mlp_vae"   #  trans_vae / mlp_vae
       z_dim: 8
       n_layer: 4

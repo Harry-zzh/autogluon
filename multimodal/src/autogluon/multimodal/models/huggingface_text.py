@@ -227,7 +227,7 @@ class HFAutoModelForTextPrediction(nn.Module):
                         input_ids=text_token_ids,
                         attention_mask=text_masks,
                     )
-            if self.pooling_mode == "cls":
+            if self.pooling_mode == "cls" or self.pooling_mode == "all":
                 pooled_features = outputs.last_hidden_state[:, 0, :]
             elif self.pooling_mode == "mean":
                 pooled_features = (outputs.last_hidden_state * text_masks.unsqueeze(-1)).sum(1)
@@ -256,6 +256,9 @@ class HFAutoModelForTextPrediction(nn.Module):
                 valid_lengths=text_valid_length,
                 cls_feature=pooled_features,
             )
+
+            if self.pooling_mode == "all":
+                pooled_features = last_hidden_state
 
             if column_features == {} or column_feature_masks == {}:
                 return pooled_features, logits
