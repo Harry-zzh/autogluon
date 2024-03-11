@@ -144,6 +144,7 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
         self._document_feature_names = []
         self._semantic_segmentation_feature_names = []
 
+
     @property
     def label_column(self):
         return self._label_column
@@ -450,7 +451,10 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
             if col_type == TEXT or col_type == CATEGORICAL:
                 # TODO: do we need to consider whether categorical values are valid text?
                 col_value = col_value.astype("object")
-                processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele))
+                if col_type == CATEGORICAL and self._config.categorical.convert_to_text_use_header:
+                    processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ":" + str(ele))
+                else: 
+                    processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele))
             elif col_type == NUMERICAL:
                 processed_data = pd.to_numeric(col_value).apply("{:.3f}".format)
             elif col_type == f"{TEXT}_{IDENTIFIER}":
