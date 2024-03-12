@@ -894,6 +894,10 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             efficient_finetune=OmegaConf.select(config, "optimization.efficient_finetune"),
             mixup_off_epoch=OmegaConf.select(config, "data.mixup.turn_off_epoch"),
             skip_final_val=OmegaConf.select(config, "optimization.skip_final_val", default=False),
+            image_lr=config.optimization.image_lr,
+            text_lr=config.optimization.text_lr,
+            tabular_lr=config.optimization.tabular_lr,
+            model_list=config.model.names # 为了之后不同模态用不同lr
         )
 
     def get_litmodule_per_run(

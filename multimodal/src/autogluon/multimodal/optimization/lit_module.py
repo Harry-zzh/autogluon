@@ -51,6 +51,10 @@ class LitModule(pl.LightningModule):
         model_postprocess_fn: Callable = None,
         skip_final_val: Optional[bool] = False,
         track_grad_norm: Optional[Union[int, str]] = -1,
+        image_lr:Optional[float] = None,
+        text_lr:Optional[float] = None,
+        tabular_lr:Optional[float] = None,
+        model_list: Optional[List] = None,
     ):
         """
         Parameters
@@ -345,6 +349,10 @@ class LitModule(pl.LightningModule):
             model=self.model,
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
+            image_lr=self.hparams.image_lr,
+            text_lr=self.hparams.text_lr,
+            tabular_lr=self.hparams.tabular_lr,
+            model_list=self.hparams.model_list
         )
         if self.hparams.lr_choice == "two_stages":
             logger.debug("applying 2-stage learning rate...")

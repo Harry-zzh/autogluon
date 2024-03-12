@@ -11,7 +11,7 @@ from .base import AbstractMultimodalFusionModel
 from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 
 from omegaconf import OmegaConf, DictConfig
-from .augment_network import AugmentNetwork
+# from .augment_network import AugmentNetwork
 import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 

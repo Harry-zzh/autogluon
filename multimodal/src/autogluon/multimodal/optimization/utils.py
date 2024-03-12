@@ -3,7 +3,7 @@ import logging
 import re
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
-
+import re
 import torch
 import torchmetrics
 from omegaconf import DictConfig, OmegaConf
@@ -735,6 +735,10 @@ def apply_layerwise_lr_decay(
     weight_decay: float,
     efficient_finetune: Optional[str] = None,
     trainable_param_names: Optional[List] = None,
+    image_lr: Optional[float] = None,
+    text_lr: Optional[float] = None,
+    tabular_lr: Optional[float] = None,
+    model_list: Optional[List] = None,
 ):
     """
     Assign monotonically decreasing learning rates for layers from the output end to the input end.
@@ -765,6 +769,9 @@ def apply_layerwise_lr_decay(
     parameter_group_vars = {}
     decay_param_names = get_weight_decay_param_names(model)
 
+    ## 更新一下model_list ，把fusion去掉
+    model_list = [model_name for model_name in model_list if "fusion" not in model_name ]
+
     for name, param in model.named_parameters():
         if name.startswith("_orig_mod."):
             name = "".join(name.split("_orig_mod."))
@@ -792,18 +799,49 @@ def apply_layerwise_lr_decay(
         layer_id = model.name_to_id[name]
         group_name = "layer_%d_%s" % (layer_id, group_name)
 
-        if group_name not in parameter_group_names:
-            scale = lr_decay**layer_id
-            parameter_group_names[group_name] = {
-                "weight_decay": this_weight_decay,
-                "params": [],
-                "lr": scale * lr,
-            }
-            parameter_group_vars[group_name] = {
-                "weight_decay": this_weight_decay,
-                "params": [],
-                "lr": scale * lr,
-            }
+        if (image_lr or text_lr or tabular_lr) and ("model.0" in name or "model.1" in name or "model.2" in name):
+            pattern = re.compile(r'\d+')
+            
+            # 找到所有匹配
+            match = pattern.search(name)
+            
+            # 输出匹配的数字
+            if match:
+                match = match.group()
+                group_name += f"_model_{match}"
+                model_idx = int(match)
+            if "text" in model_list[model_idx]:
+                modality_lr = text_lr
+            elif "image" in model_list[model_idx]:
+                modality_lr = image_lr
+            elif "ft" in model_list[model_idx]:
+                modality_lr = tabular_lr
+            
+            if group_name not in parameter_group_names:
+                scale = lr_decay**layer_id
+                parameter_group_names[group_name] = {
+                    "weight_decay": this_weight_decay,
+                    "params": [],
+                    "lr": scale * modality_lr,
+                }
+                parameter_group_vars[group_name] = {
+                    "weight_decay": this_weight_decay,
+                    "params": [],
+                    "lr": scale * modality_lr,
+                }
+        else:
+            if group_name not in parameter_group_names:
+                scale = lr_decay**layer_id
+                parameter_group_names[group_name] = {
+                    "weight_decay": this_weight_decay,
+                    "params": [],
+                    "lr": scale * lr,
+                }
+                parameter_group_vars[group_name] = {
+                    "weight_decay": this_weight_decay,
+                    "params": [],
+                    "lr": scale * lr,
+                }
 
         parameter_group_vars[group_name]["params"].append(param)
         parameter_group_names[group_name]["params"].append(name)
