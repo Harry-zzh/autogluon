@@ -79,7 +79,7 @@ def forward_for_sequential_fusion(
         inputs_embeds=inputs_embeds,
     )
     if pre_state != None:
-        attention_mask = torch.cat((attention_mask, torch.ones((1, 1), device=device)), dim=1)
+        attention_mask = torch.cat((attention_mask, torch.ones((attention_mask.size()[0], 1), device=device)), dim=1)
         embedding_output = torch.cat((pre_state.unsqueeze(1), embedding_output), dim=1)
     encoder_outputs = self.encoder(
         embedding_output,
