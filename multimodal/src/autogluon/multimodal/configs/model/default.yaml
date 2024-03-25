@@ -40,6 +40,7 @@ model:
       # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       # - "insert_punc(0.05)"
     early_fusion: False
+    sequential_fusion: False
   ner_text:
     checkpoint_name: "bert-base-cased"
     max_text_len: 512
@@ -77,6 +78,7 @@ model:
     text_aug_detect_length: 10                # We perform text augmentation only if a text has more than text_detection_length words. It is used to differentiate text columns versus tabular columns that are treated as text.
     text_trivial_aug_maxscale: 0.0            # augmentation magnitude randomly drawn from [0, text_trivial_aug_maxscale]
     early_fusion: False
+    sequential_fusion: False
   t_few:
     checkpoint_name: "t5-small" #"bigscience/T0_3B"
     gradient_checkpointing: False
@@ -109,6 +111,7 @@ model:
     image_size: null
     max_img_num_per_col: 2
     early_fusion: False
+    sequential_fusion: False
 
   mmdet_image:
     checkpoint_name: "yolov3_mobilenetv2_8xb24-320-300e_coco"
@@ -226,6 +229,31 @@ model:
       consist_reg: True
       consist_loss_weight: 0.01
       consist_t: 0.5
+  sequential_fusion_mlp:
+    weight: 0.1
+    adapt_in_features: "max"
+    hidden_sizes:
+      - 128
+    activation: "leaky_relu"
+    drop_rate: 0.1
+    normalization: "layer_norm"
+    early_fusion: False
+    sequential_fusion: False
+    data_types:
+    augmenter:
+      turn_on: False
+      arch: "mlp_vae"   #  trans_vae / mlp_vae
+      z_dim: 8
+      n_layer: 4
+      n_head: 8
+      tran_hidden: 2048
+      kl_loss_weight: 0.1
+      regularizer_loss_weight: 0.1
+      adv_weight: 0.0001
+      consist_reg: True
+      consist_loss_weight: 0.01
+      consist_t: 0.5
+    
   fusion_metatransformer:
     # weight: 0.1
     # adapt_in_features: "max"
@@ -251,6 +279,7 @@ model:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     early_fusion: False
+    sequential_fusion: False
   fusion_ner:
     weight:
     adapt_in_features: "max"
@@ -300,7 +329,7 @@ model:
     pooling_mode: "cls"
     checkpoint_name: null
     early_fusion: False
-
+    sequential_fusion: False
   sam:
     checkpoint_name: "facebook/sam-vit-huge"
     image_norm: "imagenet"

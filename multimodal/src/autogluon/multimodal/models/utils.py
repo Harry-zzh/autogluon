@@ -786,6 +786,7 @@ def run_model(model: nn.Module, batch: dict, trt_model: Optional[nn.Module] = No
     from ..utils.onnx import OnnxModule
     from .document_transformer import DocumentTransformer
     from .fusion.fusion_mlp import MultimodalFusionMLP
+    from .fusion.sequential_fusion_mlp import SequentialMultimodalFusionMLP
     from .huggingface_text import HFAutoModelForTextPrediction
     from .t_few import TFewModel
     from .timm_image import TimmAutoModelForImagePrediction
@@ -796,6 +797,7 @@ def run_model(model: nn.Module, batch: dict, trt_model: Optional[nn.Module] = No
         MultimodalFusionMLP,
         TFewModel,
         OnnxModule,
+        SequentialMultimodalFusionMLP
     )
     pure_model = model
     if isinstance(model, torch._dynamo.eval_frame.OptimizedModule):
@@ -809,6 +811,9 @@ def run_model(model: nn.Module, batch: dict, trt_model: Optional[nn.Module] = No
                 batch[k] = batch[k].to(torch.int64)
     if (not isinstance(pure_model, DocumentTransformer)) and isinstance(pure_model, supported_models):
         input_vec = [batch[k] for k in pure_model.input_keys]
+         # 专门为sequential fusion写的
+        if 'pre_state' in batch.keys():
+            input_vec.append(batch['pre_state'])
         column_names, column_values = [], []
         for k in batch.keys():
             has_image_column_prefix = isinstance(pure_model, TimmAutoModelForImagePrediction) and k.startswith(
