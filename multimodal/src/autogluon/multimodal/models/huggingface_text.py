@@ -63,10 +63,7 @@ def forward_for_sequential_fusion(
     device = input_ids.device if input_ids is not None else inputs_embeds.device
 
     if attention_mask is None:
-        if pre_state != None:
-            attention_mask = torch.ones(input_shape + 1, device=device)
-        else:
-            attention_mask = torch.ones(input_shape, device=device)
+        attention_mask = torch.ones(input_shape, device=device)
 
     if token_type_ids is None:
         token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
