@@ -3,3 +3,4 @@ from .fusion_mlp import MultimodalFusionMLP
 from .fusion_ner import MultimodalFusionNER
 from .fusion_transformer import MultimodalFusionTransformer
 from .fusion_meta_transformer import MultimodalMetaTransformer
+from .sequential_fusion_mlp import SequentialMultimodalFusionMLP

@@ -465,6 +465,7 @@ class FT_Transformer(nn.Module):
         checkpoint_name: str = None,
         pretrained: bool = False,
         early_fusion: bool = False,
+        sequential_fusion: bool = False,
     ) -> None:
         """
         Parameters
@@ -545,6 +546,7 @@ class FT_Transformer(nn.Module):
         self.categorical_feature_tokenizer = None
         self.numerical_feature_tokenizer = None
         self.early_fusion = early_fusion
+        self.sequential_fusion = sequential_fusion
 
 
         if num_categories:
@@ -678,7 +680,12 @@ class FT_Transformer(nn.Module):
             multimodal_features.append(numerical_features)
 
         multimodal_features = torch.cat(multimodal_features, dim=1)
+
+        
         multimodal_features = self.cls_token(multimodal_features)
+        # sequential fusion
+        if self.sequential_fusion and 'pre_state' in batch:
+            multimodal_features = torch.cat([multimodal_features, batch['pre_state'].unsqueeze(1)], dim=1)
 
         if self.early_fusion:
             return {
@@ -690,6 +697,9 @@ class FT_Transformer(nn.Module):
         features = self.transformer(multimodal_features)
         logits = self.head(features)
 
+        if self.sequential_fusion and 'pre_state' in batch:
+            state = features[:, -1, :]
+            features = features[:, 0:-1, :]
         if self.pooling_mode == "cls":
             features = features[:, -1, :]
         elif self.pooling_mode == "mean":
@@ -703,8 +713,11 @@ class FT_Transformer(nn.Module):
             self.prefix: {
                 LOGITS: logits,
                 FEATURES: features,
+                
             }
         }
+        if 'pre_state' in batch:
+            output[self.prefix].update({"state": state})
 
         return output
 

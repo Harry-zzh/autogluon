@@ -20,6 +20,7 @@ from ..constants import (
     FT_TRANSFORMER,
     FUSION_MLP,
     FUSION_METATRANSFORMER,
+    SEQUENTIAL_FUSION_MLP,
     FUSION_NER,
     FUSION_TRANSFORMER,
     HF_TEXT,
@@ -62,6 +63,7 @@ from ..models import (
     SAMForSemanticSegmentation,
     TFewModel,
     TimmAutoModelForImagePrediction,
+    SequentialMultimodalFusionMLP
 )
 from ..models.utils import inject_adaptation_to_linear_layer
 
@@ -223,7 +225,8 @@ def create_model(
             num_classes=num_classes,
             mix_choice=model_config.mix_choice,
             pretrained=pretrained,
-            early_fusion=model_config.early_fusion
+            early_fusion=model_config.early_fusion,
+            sequential_fusion=model_config.sequential_fusion
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
@@ -236,7 +239,8 @@ def create_model(
             pretrained=pretrained,
             tokenizer_name=model_config.tokenizer_name,
             use_fast=OmegaConf.select(model_config, "use_fast", default=True),
-            early_fusion=model_config.early_fusion
+            early_fusion=model_config.early_fusion,
+            sequential_fusion=model_config.sequential_fusion
         )
     elif model_name.lower().startswith(T_FEW):
         model = TFewModel(
@@ -369,6 +373,19 @@ def create_model(
             additive_attention=OmegaConf.select(model_config, "additive_attention", default=False),
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
         )
+    elif model_name.lower().startswith(SEQUENTIAL_FUSION_MLP):
+        model = functools.partial(
+            SequentialMultimodalFusionMLP,
+            prefix=model_name,
+            hidden_features=model_config.hidden_sizes,
+            num_classes=num_classes,
+            adapt_in_features=model_config.adapt_in_features,
+            activation=model_config.activation,
+            dropout_prob=model_config.drop_rate,
+            normalization=model_config.normalization,
+            loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
+            aug_config=OmegaConf.select(model_config, "augmenter"),
+        )
     elif model_name.lower().startswith(FUSION_NER):
         model = functools.partial(
             MultimodalFusionNER,
@@ -429,7 +446,8 @@ def create_model(
             pooling_mode=OmegaConf.select(model_config, "pooling_mode", default="cls"),
             checkpoint_name=model_config.checkpoint_name,
             pretrained=pretrained,
-            early_fusion=model_config.early_fusion
+            early_fusion=model_config.early_fusion,
+            sequential_fusion=model_config.sequential_fusion
         )
     elif model_name.lower().startswith(SAM):
         model = SAMForSemanticSegmentation(
