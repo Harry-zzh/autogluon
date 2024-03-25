@@ -261,7 +261,7 @@ def create_fusion_data_processors(
 
     model_dict = {model.prefix: model}
 
-    if model.prefix.lower().startswith("fusion"):
+    if model.prefix.lower().startswith("fusion") or model.prefix.lower().startswith("sequential_fusion"):
         for per_model in model.model:
             model_dict[per_model.prefix] = per_model
 

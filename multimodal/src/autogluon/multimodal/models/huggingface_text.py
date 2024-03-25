@@ -26,10 +26,99 @@ from .utils import (
     get_pretrained_tokenizer,
     init_weights,
 )
+from transformers.modeling_outputs import  BaseModelOutput
 
 hf_logging.set_verbosity_error()
 
 logger = logging.getLogger(__name__)
+
+
+def forward_for_sequential_fusion(
+    self,
+    input_ids: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    token_type_ids: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.Tensor] = None,
+    inputs_embeds: Optional[torch.Tensor] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    pre_state: Optional[torch.Tensor] = None,
+):
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if input_ids is not None and inputs_embeds is not None:
+        raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+    elif input_ids is not None:
+        input_shape = input_ids.size()
+    elif inputs_embeds is not None:
+        input_shape = inputs_embeds.size()[:-1]
+    else:
+        raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+    if attention_mask is None:
+        if pre_state != None:
+            attention_mask = torch.ones(input_shape + 1, device=device)
+        else:
+            attention_mask = torch.ones(input_shape, device=device)
+
+    if token_type_ids is None:
+        token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+
+    embedding_output = self.embeddings(
+        input_ids=input_ids,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        mask=attention_mask,
+        inputs_embeds=inputs_embeds,
+    )
+    if pre_state != None:
+        attention_mask = torch.cat((attention_mask, torch.ones((1, 1), device=device)), dim=1)
+    if pre_state != None:
+        embedding_output = torch.cat((pre_state.unsqueeze(1), embedding_output), dim=1)
+    encoder_outputs = self.encoder(
+        embedding_output,
+        attention_mask,
+        output_hidden_states=True,
+        output_attentions=output_attentions,
+        return_dict=return_dict,
+    )
+    encoded_layers = encoder_outputs[1]
+
+    if self.z_steps > 1:
+        hidden_states = encoded_layers[-2]
+        layers = [self.encoder.layer[-1] for _ in range(self.z_steps)]
+        query_states = encoded_layers[-1]
+        rel_embeddings = self.encoder.get_rel_embedding()
+        attention_mask = self.encoder.get_attention_mask(attention_mask)
+        rel_pos = self.encoder.get_rel_pos(embedding_output)
+        for layer in layers[1:]:
+            query_states = layer(
+                hidden_states,
+                attention_mask,
+                output_attentions=False,
+                query_states=query_states,
+                relative_pos=rel_pos,
+                rel_embeddings=rel_embeddings,
+            )
+            encoded_layers.append(query_states)
+
+    sequence_output = encoded_layers[-1]
+
+    if not return_dict:
+        return (sequence_output,) + encoder_outputs[(1 if output_hidden_states else 2) :]
+
+    return BaseModelOutput(
+        last_hidden_state=sequence_output,
+        hidden_states=encoder_outputs.hidden_states if output_hidden_states else None,
+        attentions=encoder_outputs.attentions,
+    )
 
 
 class HFAutoModelForTextPrediction(nn.Module):
@@ -50,6 +139,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         tokenizer_name: Optional[str] = "hf_auto",
         use_fast: Optional[bool] = True,
         early_fusion: bool = False,
+        sequential_fusion: bool = False,
     ):
         """
         Load a pretrained huggingface text transformer backbone.
@@ -93,7 +183,8 @@ class HFAutoModelForTextPrediction(nn.Module):
         self.checkpoint_name = checkpoint_name
         self.num_classes = num_classes
         self.early_fusion = early_fusion
-
+        self.sequential_fusion = sequential_fusion
+        
         self.config, self.model = get_hf_config_and_model(
             checkpoint_name=checkpoint_name, pretrained=pretrained, low_cpu_mem_usage=low_cpu_mem_usage
         )
@@ -103,6 +194,11 @@ class HFAutoModelForTextPrediction(nn.Module):
             checkpoint_name=self.checkpoint_name,
             use_fast=use_fast,
         )
+
+        if self.sequential_fusion:
+            sequential_forward = forward_for_sequential_fusion.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward", sequential_forward)
+
 
         if isinstance(self.model, T5PreTrainedModel):
             self.is_t5 = True
@@ -173,6 +269,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         text_token_ids: torch.Tensor,
         text_segment_ids: torch.Tensor,
         text_valid_length: torch.Tensor,
+        pre_state: Optional[torch.Tensor] = None,
         text_column_names: Optional[List[str]] = None,
         text_column_indices: Optional[List[torch.Tensor]] = None,
     ):
@@ -221,12 +318,18 @@ class HFAutoModelForTextPrediction(nn.Module):
                         input_ids=text_token_ids,
                         token_type_ids=text_segment_ids,
                         attention_mask=text_masks,
+                        pre_state=pre_state
                     )
                 else:
                     outputs = self.model(
                         input_ids=text_token_ids,
                         attention_mask=text_masks,
                     )
+            if pre_state != None:
+                state = outputs.last_hidden_state[:, 0, :]
+                outputs.last_hidden_state = outputs.last_hidden_state[:, 1:, :]
+            else:
+                state = None
             if self.pooling_mode == "cls" or self.pooling_mode == "all":
                 pooled_features = outputs.last_hidden_state[:, 0, :]
             elif self.pooling_mode == "mean":
@@ -261,9 +364,9 @@ class HFAutoModelForTextPrediction(nn.Module):
                 pooled_features = last_hidden_state
 
             if column_features == {} or column_feature_masks == {}:
-                return pooled_features, logits
+                return pooled_features, logits, state
             else:
-                return pooled_features, logits, column_features, column_feature_masks
+                return pooled_features, logits, column_features, column_feature_masks, state
         else:
             if self.is_t5:
                 # For the T5 model, we will only use the encoder to encode the sentence. This is adopted in
@@ -315,8 +418,10 @@ class HFAutoModelForTextPrediction(nn.Module):
         self,
         pooled_features: torch.Tensor,
         logits: torch.Tensor,
+        state: Optional[torch.Tensor] = None,
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
+        
     ):
         if self.early_fusion:
             return {
@@ -330,6 +435,7 @@ class HFAutoModelForTextPrediction(nn.Module):
             ret[COLUMN_FEATURES][MASKS].update(column_feature_masks)
         ret[LOGITS] = logits
         ret[FEATURES] = pooled_features
+        ret["state"] = state
         return {self.prefix: ret}
 
     def get_layer_ids(self):
