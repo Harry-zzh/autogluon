@@ -10,12 +10,193 @@ from torch import nn
 
 from ..constants import AUTOMM, COLUMN, COLUMN_FEATURES, FEATURES, IMAGE, IMAGE_VALID_NUM, LABEL, LOGITS, MASKS
 from .utils import assign_layer_ids, get_column_features, get_model_head
-
+from timm.models._manipulate import checkpoint_seq, named_apply
+from timm.models.swin_transformer import window_partition, window_reverse
+import math
 logger = logging.getLogger(__name__)
 
 
 # Stores the class names of the timm backbones that support variable input size. You can add more backbones to the list.
 SUPPORT_VARIABLE_INPUT_SIZE_TIMM_CLASSES = {"convnext", "efficientnet", "mobilenetv3", "regnet", "resnet"}
+
+def forward_sequential_fusion(self, x, state = None):
+    if state != None:
+        x, state = self.forward_features(x, state)
+        B, L, C = x.shape
+        H = W = int(math.sqrt(L))
+        x = x.reshape(B, H, W, C)
+    else:
+        x = self.forward_features(x, state)
+    x = self.forward_head(x)
+    if state != None:
+        return x, state
+    else:
+        return x
+    
+def forward_feature_sequential_fusion(self, x, state= None):
+    x = self.patch_embed(x)
+    B, H, W, C = x.size()
+    
+    for layer in self.layers[0:-1]:
+        x = layer(x)
+
+    # if state != None: # 只弄最后一个stage？
+    #     x = x.reshape(B, -1, C)
+    #     state = state.expand(B, -1, -1)
+    #     x = torch.cat((state, x), dim=1)
+    x = self.layers[-1](x, state)
+
+    x = self.norm(x)
+    if state != None:
+        state = x[:, 0, :]
+        x = x[:, 1:, :]
+        return x, state
+    return x
+
+def forward_transformer_stage_sequential_fusion(self, x, state =None): 
+    # if x.dim() == 3: # 有state
+    #     state = x[:, 0, :]
+    #     x = x[:, 1:, :]
+    # else:
+    #     state = None
+    
+    x = self.downsample(x)
+
+    B, H, W, C = x.size()
+    if state != None:
+        x = x.reshape(B, -1, C)
+        state = state.expand(B, -1, -1)
+        x = torch.cat((state, x), dim=1)
+
+    if self.grad_checkpointing and not torch.jit.is_scripting():
+        x = checkpoint_seq(self.blocks, x)
+    else:
+        x = self.blocks(x)
+    return x
+
+def forward_block_sequential_fusion(self, x):
+    x = self.norm1(x)
+    x = x + self.drop_path1(self._attn(x))
+    x = x + self.drop_path2(self.mlp(self.norm2(x)))
+    return x
+
+
+def forward_attn_sequential_fusion(self, x):
+    if x.dim() == 3: # 用了sequential fusion state
+        B, L, C = x.shape
+        state = x[:, 0, :]
+        x = x[:, 1:, :]
+        H = W = int(math.sqrt(L - 1))
+        x = x.reshape(B, H, W ,C)
+    else:
+        B, H, W, C = x.shape
+        state = None
+
+    # cyclic shift
+    has_shift = any(self.shift_size)
+    if has_shift:
+        shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1]), dims=(1, 2))
+    else:
+        shifted_x = x
+
+    # pad for resolution not divisible by window size
+    pad_h = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
+    pad_w = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
+    shifted_x = torch.nn.functional.pad(shifted_x, (0, 0, 0, pad_w, 0, pad_h))
+    Hp, Wp = H + pad_h, W + pad_w
+
+    # partition windows
+    x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+    x_windows = x_windows.view(-1, self.window_area, C)  # nW*B, window_size*window_size, C
+
+    # 把state concate回去
+    if state != None:
+        # B, num_prompts, C --> nW*B, num_prompts, C
+        num_windows = x_windows.size()[0] // B
+        state = state.unsqueeze(0)
+        state = state.expand(num_windows, -1, -1, -1)
+        state = state.reshape((-1, 1, C))
+        x_windows = torch.cat((state, x_windows), dim=1)
+
+    # W-MSA/SW-MSA
+    attn_windows = self.attn(x_windows, mask=self.attn_mask, state=state)  # nW*B, window_size*window_size, C
+
+    if state != None: # 用了sequential fusion state
+        state = attn_windows[:, 0, :].view(-1, B, 1, C)
+        attn_windows = attn_windows[:, 1:, :]
+        state = state.mean(0)
+
+    # merge windows
+    attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], C)
+    shifted_x = window_reverse(attn_windows, self.window_size, Hp, Wp)  # B H' W' C
+    shifted_x = shifted_x[:, :H, :W, :].contiguous()
+
+    # reverse cyclic shift
+    if has_shift:
+        x = torch.roll(shifted_x, shifts=self.shift_size, dims=(1, 2))
+    else:
+        x = shifted_x
+
+    if state != None:
+        x = x.view(B, -1, C)
+        x = torch.cat((state, x), dim=1)
+
+    return x
+
+def forward_window_attn_seq_fusion(self, x, mask: Optional[torch.Tensor] = None, state = None):
+    B_, N, C = x.shape
+    qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+    q, k, v = qkv.unbind(0)
+
+    if self.fused_attn:
+        attn_mask = self._get_rel_pos_bias()
+        if mask is not None:
+            num_win = mask.shape[0]
+            mask = mask.view(1, num_win, 1, N, N).expand(B_ // num_win, -1, self.num_heads, -1, -1)
+            attn_mask = attn_mask + mask.reshape(-1, self.num_heads, N, N)
+        x = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=self.attn_drop.p if self.training else 0.,
+        )
+    else:
+        q = q * self.scale
+        attn = q @ k.transpose(-2, -1)
+        relative_position_bias = self._get_rel_pos_bias().squeeze(0)
+        _C, _H, _W = relative_position_bias.shape
+        if state != None:
+            relative_position_bias = torch.cat((
+                torch.zeros(_C, 1, _W, device=attn.device),
+                relative_position_bias
+                ), dim=1)
+            relative_position_bias = torch.cat((
+                torch.zeros(_C, _H + 1, 1, device=attn.device),
+                relative_position_bias
+                ), dim=-1)
+        attn = attn + relative_position_bias.unsqueeze(0)
+
+        if mask is not None:
+            num_win = mask.shape[0]
+            if state != None:
+                # expand relative_position_bias
+                mask = torch.cat((
+                    torch.zeros(num_win, 1, _W, device=attn.device),
+                    mask), dim=1)
+                mask = torch.cat((
+                    torch.zeros(
+                        num_win, _H + 1, 1,
+                        device=attn.device),
+                    mask), dim=-1)
+            attn = attn.view(-1, num_win, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(-1, self.num_heads, N, N)
+        attn = self.softmax(attn)
+        attn = self.attn_drop(attn)
+        x = attn @ v
+
+    x = x.transpose(1, 2).reshape(B_, N, -1)
+    x = self.proj(x)
+    x = self.proj_drop(x)
+    return x
 
 
 class TimmAutoModelForImagePrediction(nn.Module):
@@ -31,7 +212,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
         num_classes: Optional[int] = 0,
         mix_choice: Optional[str] = "all_logits",
         pretrained: Optional[bool] = True,
-        early_fusion = False
+        early_fusion = False,
+        sequential_fusion=False
     ):
         """
         Load a pretrained image backbone from TIMM.
@@ -66,6 +248,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
                         if k not in self.config:
                             self.config[k] = v
                     self.checkpoint_name = self.config.get("architecture", None)
+                    # depths: 2, 2, 18, 2
                     self.model = create_model(self.checkpoint_name, checkpoint_path=checkpoint_path, num_classes=0)
                     # create a head with new num_classes
                     self.head = (
@@ -93,9 +276,34 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         self.prefix = prefix
 
+        # sequential_fusion 相关
+        self.sequential_fusion = sequential_fusion
+        if self.sequential_fusion:
+            sequential_fusion_forward = forward_sequential_fusion.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward", sequential_fusion_forward)
+
+            fea_sequential_fusion_forward = forward_feature_sequential_fusion.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward_features", fea_sequential_fusion_forward)
+
+            for layer in self.model.layers:
+                layer_forward = forward_transformer_stage_sequential_fusion.__get__(layer, layer.__class__)
+                setattr(layer, "forward", layer_forward)
+
+                for block in layer.blocks:
+                    block_forward = forward_block_sequential_fusion.__get__(block, block.__class__)
+                    setattr(block, "forward", block_forward)
+                    attn_forward = forward_attn_sequential_fusion.__get__(block, block.__class__)
+                    setattr(block, "_attn", attn_forward)
+
+                    window_attn_forward = forward_window_attn_seq_fusion.__get__(block.attn, block.attn.__class__)
+                    setattr(block.attn, "forward", window_attn_forward)
+
+
+
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
+        
     @property
     def image_key(self):
         return f"{self.prefix}_{IMAGE}"
@@ -134,8 +342,10 @@ class TimmAutoModelForImagePrediction(nn.Module):
         self,
         images: torch.FloatTensor,
         image_valid_num: torch.Tensor,
+        pre_state=None,
         image_column_names: Optional[List[str]] = None,
         image_column_indices: Optional[List[torch.Tensor]] = None,
+        
     ):
         """
         Parameters
@@ -168,7 +378,10 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         elif self.mix_choice == "all_logits":  # mix outputs
             b, n, c, h, w = images.shape
-            features = self.model(images.reshape((b * n, c, h, w)))  # (b*n, num_features)
+            if pre_state != None:
+                features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
+            else:
+                features = self.model(images.reshape((b * n, c, h, w)), state=pre_state) 
             if self.num_classes > 0:
                 logits = self.head(features)
             steps = torch.arange(0, n).type_as(image_valid_num)
@@ -203,6 +416,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
             raise ValueError(f"unknown mix_choice: {self.mix_choice}")
 
         if column_features == {} or column_feature_masks == {}:
+            if pre_state != None:
+                return features, logits, state
             return features, logits
         else:
             return features, logits, column_features, column_feature_masks
@@ -211,10 +426,13 @@ class TimmAutoModelForImagePrediction(nn.Module):
         self,
         features: torch.Tensor,
         logits: torch.Tensor,
+        state: Optional[torch.Tensor] = None,
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
     ):
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
+        if state != None:
+            ret["state"] = state
 
         if column_features != None:
             ret[COLUMN_FEATURES][FEATURES].update(column_features)
