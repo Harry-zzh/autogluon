@@ -65,7 +65,7 @@ def forward_transformer_stage_sequential_fusion(self, x, state =None):
     B, H, W, C = x.size()
     if state != None:
         x = x.reshape(B, -1, C)
-        state = state.expand(B, -1, -1)
+        state = state.unsqueeze(1)
         x = torch.cat((state, x), dim=1)
 
     if self.grad_checkpointing and not torch.jit.is_scripting():
@@ -113,7 +113,7 @@ def forward_attn_sequential_fusion(self, x):
     if state != None:
         # B, num_prompts, C --> nW*B, num_prompts, C
         num_windows = x_windows.size()[0] // B
-        state = state.unsqueeze(0)
+        state = state.unsqueeze(1)
         state = state.expand(num_windows, -1, -1, -1)
         state = state.reshape((-1, 1, C))
         x_windows = torch.cat((state, x_windows), dim=1)
