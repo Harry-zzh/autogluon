@@ -310,12 +310,19 @@ class HFAutoModelForTextPrediction(nn.Module):
                 )
             else:
                 if "token_type_ids" in self.tokenizer.model_input_names:
-                    outputs = self.model(
-                        input_ids=text_token_ids,
-                        token_type_ids=text_segment_ids,
-                        attention_mask=text_masks,
-                        pre_state=pre_state
-                    )
+                    if pre_state == None:
+                        outputs = self.model(
+                            input_ids=text_token_ids,
+                            token_type_ids=text_segment_ids,
+                            attention_mask=text_masks,
+                        )
+                    else:
+                        outputs = self.model(
+                            input_ids=text_token_ids,
+                            token_type_ids=text_segment_ids,
+                            attention_mask=text_masks,
+                            pre_state=pre_state
+                        )
                 else:
                     outputs = self.model(
                         input_ids=text_token_ids,
