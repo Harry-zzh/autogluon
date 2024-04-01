@@ -88,6 +88,9 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             loss_weight=loss_weight,
         )
         logger.debug("initializing SequentialMultimodalFusionMLP")
+        if loss_weight == 0.:
+            self.loss_weight = loss_weight = None
+
         if loss_weight is not None:
             assert loss_weight > 0
         self.num_classes = num_classes
