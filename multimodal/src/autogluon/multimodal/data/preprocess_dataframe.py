@@ -458,12 +458,19 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
                 # TODO: do we need to consider whether categorical values are valid text?
                 col_value = col_value.astype("object")
                 if col_type == CATEGORICAL and self._config.categorical.convert_to_text_use_header:
-                    processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ":" + str(ele))
+                    template = self._config.categorical.convert_to_text_use_header_template
+                    if template == "list": # 默认是list template
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ": " + str(ele))
+                    elif template == "text": 
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + " is " + str(ele))
+                    elif template == "latex": # 这个应该要配合insert_sep=false，在外面判断
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele) + " & ")
+                    # elif template == ""
                 else: 
                     processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele))
             elif col_type == NUMERICAL:
                 if self._config.numerical.convert_to_text_use_header:
-                    processed_data = pd.to_numeric(col_value).apply(lambda ele: "{}:{:.3f}".format(col_name, ele))
+                    processed_data = pd.to_numeric(col_value).apply(lambda ele: "{}: {:.3f}".format(col_name, ele))
                 else:
                     processed_data = pd.to_numeric(col_value).apply("{:.3f}".format)
             elif col_type == f"{TEXT}_{IDENTIFIER}":
