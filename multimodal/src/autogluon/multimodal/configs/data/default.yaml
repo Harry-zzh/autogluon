@@ -8,6 +8,7 @@ data:
     maximum_num_cat: 20  # The maximum amount of categories that can be considered non-rare.
     convert_to_text: True  # Whether to convert the feature to text.
     convert_to_text_use_header: False # Whether to integrate the header information.
+    convert_to_text_use_header_template: "list"
   numerical:
     convert_to_text: False  # Whether to convert the feature to text.
     scaler_with_mean: True  # Whether to normalize with mean.

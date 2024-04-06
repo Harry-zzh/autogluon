@@ -452,7 +452,13 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
                 # TODO: do we need to consider whether categorical values are valid text?
                 col_value = col_value.astype("object")
                 if col_type == CATEGORICAL and self._config.categorical.convert_to_text_use_header:
-                    processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ":" + str(ele))
+                    template = self._config.categorical.convert_to_text_use_header_template
+                    if template == "list": 
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ": " + str(ele))
+                    elif template == "text": 
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + " is " + str(ele))
+                    elif template == "latex":
+                        processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele) + " & ")
                 else: 
                     processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele))
             elif col_type == NUMERICAL:

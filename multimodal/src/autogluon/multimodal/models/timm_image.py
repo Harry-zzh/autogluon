@@ -381,7 +381,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
             if pre_state != None:
                 features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
             else:
-                features = self.model(images.reshape((b * n, c, h, w)), state=pre_state) 
+                features = self.model(images.reshape((b * n, c, h, w))) 
             if self.num_classes > 0:
                 logits = self.head(features)
             steps = torch.arange(0, n).type_as(image_valid_num)
