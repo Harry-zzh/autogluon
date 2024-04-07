@@ -222,7 +222,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         multimodal_logits = []
         offset = 0
     
-        pre_state = self.init_state(args[0].size()[0]) # batch size
+        pre_state = self.init_state(args[-1].size()[0]) # batch size
         cur_model_idx = 0 
         for per_model, per_adapter in zip(self.model, self.state_adapter): # 这里的per_adapter来自self.state_adapter
             per_model_args = args[offset : offset + len(per_model.input_keys)]
