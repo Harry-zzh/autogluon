@@ -127,25 +127,43 @@ class MultimodalMetaTransformer(AbstractMultimodalFusionModel):
         else:
             raise ValueError(f"unknown adapt_in_features: {adapt_in_features}")
 
-        self.adapter = nn.ModuleList([nn.Linear(in_feat, base_in_feat) for in_feat in raw_in_features])
+        # self.adapter = nn.ModuleList([nn.Linear(in_feat, base_in_feat) for in_feat in raw_in_features])
+        # in_features = base_in_feat
+        
 
-        in_features = base_in_feat
+        # # For base-scale encoder:
+        # ckpt = torch.load("./Meta-Transformer_base_patch16_encoder.pth")
+        # self.fusion_transformer = nn.Sequential(*[
+        #             Block(
+        #                 dim=768,
+        #                 num_heads=12,
+        #                 mlp_ratio=4.,
+        #                 qkv_bias=True,
+        #                 norm_layer=nn.LayerNorm,
+        #                 act_layer=nn.GELU
+        #             )
+        #             for i in range(12)])
+        # self.fusion_transformer.load_state_dict(ckpt,strict=True)
 
-        assert len(self.adapter) == len(self.model)
-
-        # For base-scale encoder:
-        ckpt = torch.load("/home/ubuntu/fetch/autogluon-bench/Meta-Transformer_base_patch16_encoder.pth")
+        # For large-scale encoder:
+        ckpt = torch.load("Meta-Transformer_large_patch14_encoder.pth")
         self.fusion_transformer = nn.Sequential(*[
                     Block(
-                        dim=768,
-                        num_heads=12,
+                        dim=1024,
+                        num_heads=16,
                         mlp_ratio=4.,
                         qkv_bias=True,
                         norm_layer=nn.LayerNorm,
                         act_layer=nn.GELU
                     )
-                    for i in range(12)])
+                    for i in range(24)])
         self.fusion_transformer.load_state_dict(ckpt,strict=True)
+
+        # 和fusion_transformer的输入维度保持一致。
+        self.adapter = nn.ModuleList([nn.Linear(in_feat, 1024) for in_feat in raw_in_features])
+        in_features = 1024
+
+        assert len(self.adapter) == len(self.model)
 
         self.head = Custom_Transformer.Head(
             d_in=in_features,
