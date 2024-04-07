@@ -13,6 +13,7 @@ from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 from omegaconf import OmegaConf, DictConfig
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
+from ..timm_image import TimmAutoModelForImagePrediction
 logger = logging.getLogger(__name__)
 
 def consist_loss(p_logits, q_logits, threshold):
@@ -145,7 +146,11 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         # self.fusion_mlp = nn.Sequential(*fusion_mlp)
         # in_features has become the latest hidden size
         # self.head = nn.Linear(in_features, num_classes)
-        self.head = nn.Linear(raw_in_features[-1], num_classes)
+        
+        if isinstance(self.model[-1], TimmAutoModelForImagePrediction):
+            self.head = nn.Linear(self.model[-1].model.num_features, num_classes)
+        else:
+            self.head = nn.Linear(raw_in_features[-1], num_classes)
 
         self.head.apply(init_weights)
         

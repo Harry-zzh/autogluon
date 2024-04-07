@@ -63,15 +63,17 @@ def forward_sequential_fusion(self, x, state = None):
 def forward_feature_sequential_fusion(self, x, state= None):
     x = self.patch_embed(x)
     B, H, W, C = x.size()
-    
-    for layer in self.layers[0:-1]:
-        x = layer(x)
+
+    # x= self.layers(x, state)
+
+    for idx, layer in enumerate(self.layers):
+        x = layer(x, state)
 
     # if state != None: # 只弄最后一个stage？
     #     x = x.reshape(B, -1, C)
     #     state = state.expand(B, -1, -1)
     #     x = torch.cat((state, x), dim=1)
-    x = self.layers[-1](x, state)
+    # x = self.layers[-1](x, state)
 
     x = self.norm(x)
     if state != None:
@@ -81,17 +83,19 @@ def forward_feature_sequential_fusion(self, x, state= None):
     return x
 
 def forward_transformer_stage_sequential_fusion(self, x, state =None): 
-    # if x.dim() == 3: # 有state
-    #     state = x[:, 0, :]
-    #     x = x[:, 1:, :]
-    # else:
-    #     state = None
+    if x.dim() == 3: # 有state
+        state = x[:, 0, :]
+        x = x[:, 1:, :]
+        B, L, C = x.size()
+        H = W = int(math.sqrt(L))
+        x = x.reshape(B, H, W, C)
     
     x = self.downsample(x)
 
     B, H, W, C = x.size()
     if state != None:
         x = x.reshape(B, -1, C)
+        state = self.state_adapter(state)
         state = state.unsqueeze(1)
         x = torch.cat((state, x), dim=1)
 
@@ -307,7 +311,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
         else:
             self.checkpoint_name = checkpoint_name
             self.model = create_model(checkpoint_name, pretrained=pretrained, num_classes=num_classes)
-            # self.head = get_model_head(model=self.model)
             if not early_fusion:
                 self.head = get_model_head(model=self.model)
             self.config = self.model.default_cfg
@@ -318,6 +321,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         if early_fusion:
             self.out_features = self.model.embed_dim
+        elif sequential_fusion:
+            self.out_features = self.model.layers[0].dim
 
         self.global_pool = self.model.global_pool if hasattr(self.model, "global_pool") else None
         self.model.reset_classifier(0)  # remove the internal head
@@ -339,6 +344,10 @@ class TimmAutoModelForImagePrediction(nn.Module):
             for layer in self.model.layers:
                 layer_forward = forward_transformer_stage_sequential_fusion.__get__(layer, layer.__class__)
                 setattr(layer, "forward", layer_forward)
+                if isinstance(layer.downsample,nn.Identity):
+                    layer.state_adapter = nn.Identity()
+                else:
+                    layer.state_adapter = nn.Linear(layer.downsample.dim, layer.downsample.out_dim)
 
                 for block in layer.blocks:
                     block_forward = forward_block_sequential_fusion.__get__(block, block.__class__)
@@ -372,6 +381,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
+       
         if early_fusion:
             for n, p in self.model.named_parameters():
                 if "embed" not in n:
@@ -628,6 +638,11 @@ class TimmAutoModelForImagePrediction(nn.Module):
             for k in name_to_id.keys():
                 if "embed" not in k:
                     name_to_id[k] = 5 # Just set a random number, avoid introducing extra trainable parameters when setting optimizer for early fusion
+
+        if self.early_fusion:
+            for k in name_to_id.keys():
+                if "embed" not in k:
+                    name_to_id[k] = 5 # 随便设置一个数，只是为了early fusion设置opt的时候不要引入多余的可训练参数
 
         return name_to_id
 
