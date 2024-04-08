@@ -14,6 +14,7 @@ from omegaconf import OmegaConf, DictConfig
 # from .augment_network import AugmentNetwork
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
+from ..timm_image import TimmAutoModelForImagePrediction
 logger = logging.getLogger(__name__)
 
 def consist_loss(p_logits, q_logits, threshold):
@@ -153,7 +154,11 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         # self.fusion_mlp = nn.Sequential(*fusion_mlp)
         # in_features has become the latest hidden size
         # self.head = nn.Linear(in_features, num_classes)
-        self.head = nn.Linear(raw_in_features[-1], num_classes)
+        
+        if isinstance(self.model[-1], TimmAutoModelForImagePrediction):
+            self.head = nn.Linear(self.model[-1].model.num_features, num_classes)
+        else:
+            self.head = nn.Linear(raw_in_features[-1], num_classes)
 
         # Initialize Augmentation Network
         self.augmenter = None
@@ -217,7 +222,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         multimodal_logits = []
         offset = 0
     
-        pre_state = self.init_state(args[0].size()[0]) # batch size
+        pre_state = self.init_state(args[-1].size()[0]) # batch size
         cur_model_idx = 0 
         for per_model, per_adapter in zip(self.model, self.state_adapter): # 这里的per_adapter来自self.state_adapter
             per_model_args = args[offset : offset + len(per_model.input_keys)]
