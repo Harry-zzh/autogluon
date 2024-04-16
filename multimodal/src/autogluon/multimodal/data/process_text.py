@@ -310,11 +310,15 @@ class TextProcessor:
                 )["input_ids"]
                 tokens[col_name] = answer_ids
                 continue
+            
+            if type(col_text) == list and len(col_text) == 1:
+                col_text = col_text[0]
             col_tokens = self.tokenizer.encode(
                 col_text,
                 add_special_tokens=False,
                 truncation=False,
             )
+
             tokens[col_name] = np.array(col_tokens, dtype=np.int32)
         # build token sequence
         return self.build_one_token_sequence(tokens)
