@@ -199,7 +199,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             per_output = run_model(per_model, batch)
             pre_state = per_output[per_model.prefix]["state"] 
             if cur_model_idx == len(self.model):
-                multimodal_features = per_output[per_model.prefix][FEATURES] # get the last state
+                multimodal_features = per_output[per_model.prefix]["state"] # get the last state
             
             multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)

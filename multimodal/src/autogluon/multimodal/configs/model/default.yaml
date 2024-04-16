@@ -41,6 +41,7 @@ model:
       # - "insert_punc(0.05)"
     early_fusion: False
     sequential_fusion: False
+    use_miss_token_embed: False
   ner_text:
     checkpoint_name: "bert-base-cased"
     max_text_len: 512
@@ -79,6 +80,7 @@ model:
     text_trivial_aug_maxscale: 0.0            # augmentation magnitude randomly drawn from [0, text_trivial_aug_maxscale]
     early_fusion: False
     sequential_fusion: False
+    use_miss_token_embed: False
   t_few:
     checkpoint_name: "t5-small" #"bigscience/T0_3B"
     gradient_checkpointing: False
@@ -112,8 +114,8 @@ model:
     max_img_num_per_col: 2
     early_fusion: False
     sequential_fusion: False
-
-  mmdet_image:
+    use_miss_token_embed: False
+  mmdet_image:  
     checkpoint_name: "yolov3_mobilenetv2_8xb24-320-300e_coco"
     config_file: ""
     data_types:
@@ -229,6 +231,7 @@ model:
       consist_reg: True
       consist_loss_weight: 0.01
       consist_t: 0.5
+    use_miss_token_embed: False
   sequential_fusion_mlp:
     weight: 0.1
     adapt_in_features: "max"
@@ -317,6 +320,7 @@ model:
     checkpoint_name: null
     early_fusion: False
     sequential_fusion: False
+    use_miss_token_embed: False
   sam:
     checkpoint_name: "facebook/sam-vit-huge"
     image_norm: "imagenet"
