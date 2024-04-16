@@ -36,17 +36,15 @@ def forward_sequential_fusion(self, x, state = None):
 def forward_feature_sequential_fusion(self, x, state= None):
     x = self.patch_embed(x)
     B, H, W, C = x.size()
-
-    # x= self.layers(x, state)
-
-    for idx, layer in enumerate(self.layers):
-        x = layer(x, state)
+    
+    for layer in self.layers[0:-1]:
+        x = layer(x)
 
     # if state != None: # 只弄最后一个stage？
     #     x = x.reshape(B, -1, C)
     #     state = state.expand(B, -1, -1)
     #     x = torch.cat((state, x), dim=1)
-    # x = self.layers[-1](x, state)
+    x = self.layers[-1](x, state)
 
     x = self.norm(x)
     if state != None:
@@ -56,19 +54,17 @@ def forward_feature_sequential_fusion(self, x, state= None):
     return x
 
 def forward_transformer_stage_sequential_fusion(self, x, state =None): 
-    if x.dim() == 3: # 有state
-        state = x[:, 0, :]
-        x = x[:, 1:, :]
-        B, L, C = x.size()
-        H = W = int(math.sqrt(L))
-        x = x.reshape(B, H, W, C)
+    # if x.dim() == 3: # 有state
+    #     state = x[:, 0, :]
+    #     x = x[:, 1:, :]
+    # else:
+    #     state = None
     
     x = self.downsample(x)
 
     B, H, W, C = x.size()
     if state != None:
         x = x.reshape(B, -1, C)
-        state = self.state_adapter(state)
         state = state.unsqueeze(1)
         x = torch.cat((state, x), dim=1)
 
@@ -255,31 +251,23 @@ class TimmAutoModelForImagePrediction(nn.Module):
                     # depths: 2, 2, 18, 2
                     self.model = create_model(self.checkpoint_name, checkpoint_path=checkpoint_path, num_classes=0)
                     # create a head with new num_classes
-                    if not early_fusion:
-                        self.head = (
-                            Linear(in_features=self.config["num_features"], out_features=num_classes)
-                            if num_classes > 0
-                            else nn.Identity()
-                        )
+                    self.head = (
+                        Linear(in_features=self.config["num_features"], out_features=num_classes)
+                        if num_classes > 0
+                        else nn.Identity()
+                    )
                     self.num_classes = num_classes if num_classes is not None else 0
             except:
                 raise ValueError(f"Timm model path {checkpoint_name} does not exist or model is invalid.")
         else:
             self.checkpoint_name = checkpoint_name
             self.model = create_model(checkpoint_name, pretrained=pretrained, num_classes=num_classes)
-            if not early_fusion:
-                self.head = get_model_head(model=self.model)
+            self.head = get_model_head(model=self.model)
             self.config = self.model.default_cfg
             self.num_classes = self.model.num_classes
 
         self.pretrained = pretrained
         self.out_features = self.model.num_features
-        # early fusion只是用patch embed的输出，所以输出维度是emebd dim
-        if early_fusion:
-            self.out_features = self.model.embed_dim
-        elif sequential_fusion:
-            self.out_features = self.model.layers[0].dim
-
         self.global_pool = self.model.global_pool if hasattr(self.model, "global_pool") else None
         self.model.reset_classifier(0)  # remove the internal head
 
@@ -300,10 +288,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
             for layer in self.model.layers:
                 layer_forward = forward_transformer_stage_sequential_fusion.__get__(layer, layer.__class__)
                 setattr(layer, "forward", layer_forward)
-                if isinstance(layer.downsample,nn.Identity):
-                    layer.state_adapter = nn.Identity()
-                else:
-                    layer.state_adapter = nn.Linear(layer.downsample.dim, layer.downsample.out_dim)
 
                 for block in layer.blocks:
                     block_forward = forward_block_sequential_fusion.__get__(block, block.__class__)
@@ -315,15 +299,9 @@ class TimmAutoModelForImagePrediction(nn.Module):
                     setattr(block.attn, "forward", window_attn_forward)
 
 
-        self.early_fusion = early_fusion
+
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
-
-       
-        if early_fusion:
-            for n, p in self.model.named_parameters():
-                if "embed" not in n:
-                    p.requires_grad = False
 
         
     @property
@@ -399,46 +377,40 @@ class TimmAutoModelForImagePrediction(nn.Module):
             column_feature_masks = {}
 
         elif self.mix_choice == "all_logits":  # mix outputs
-            if self.early_fusion:
-                b, n, c, h, w = images.shape
-                features = self.model.patch_embed(images.reshape((b * n, c, h, w)))
-                b, h, w, c = features.shape
-                return features.reshape(b, -1, c), torch.tensor([])
+            b, n, c, h, w = images.shape
+            if pre_state != None:
+                features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
             else:
-                b, n, c, h, w = images.shape
-                if pre_state != None:
-                    features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
-                else:
-                    features = self.model(images.reshape((b * n, c, h, w))) 
-                if self.num_classes > 0:
-                    logits = self.head(features)
-                steps = torch.arange(0, n).type_as(image_valid_num)
-                image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(features)  # (b, n)
-                features = features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
+                features = self.model(images.reshape((b * n, c, h, w))) 
+            if self.num_classes > 0:
+                logits = self.head(features)
+            steps = torch.arange(0, n).type_as(image_valid_num)
+            image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(features)  # (b, n)
+            features = features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
 
-                batch = {
-                    self.image_key: images,
-                    self.image_valid_num_key: image_valid_num,
-                }
-                if image_column_names:
-                    assert len(image_column_names) == len(image_column_indices), "invalid image column inputs"
-                    for idx, name in enumerate(image_column_names):
-                        batch[name] = image_column_indices[idx]
+            batch = {
+                self.image_key: images,
+                self.image_valid_num_key: image_valid_num,
+            }
+            if image_column_names:
+                assert len(image_column_names) == len(image_column_indices), "invalid image column inputs"
+                for idx, name in enumerate(image_column_names):
+                    batch[name] = image_column_indices[idx]
 
-                # collect features by image column names
-                column_features, column_feature_masks = get_column_features(
-                    batch=batch,
-                    column_name_prefix=self.image_column_prefix,
-                    features=features,
-                    valid_lengths=image_valid_num,
-                )
+            # collect features by image column names
+            column_features, column_feature_masks = get_column_features(
+                batch=batch,
+                column_name_prefix=self.image_column_prefix,
+                features=features,
+                valid_lengths=image_valid_num,
+            )
 
-                features = features.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_features)
-                if self.num_classes > 0:
-                    logits = logits.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_classes)
-                    logits = logits.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_classes)
-                else:
-                    logits = features
+            features = features.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_features)
+            if self.num_classes > 0:
+                logits = logits.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_classes)
+                logits = logits.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_classes)
+            else:
+                logits = features
 
         else:
             raise ValueError(f"unknown mix_choice: {self.mix_choice}")
@@ -458,12 +430,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
     ):
-        if self.early_fusion:
-            return {
-                self.prefix: {
-                    FEATURES: features,
-                }
-            }
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
         if state != None:
             ret["state"] = state
@@ -511,11 +477,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
         for n in names:
             assert n not in name_to_id
             name_to_id[n] = 0
-
-        if self.early_fusion:
-            for k in name_to_id.keys():
-                if "embed" not in k:
-                    name_to_id[k] = 5 # 随便设置一个数，只是为了early fusion设置opt的时候不要引入多余的可训练参数
 
         return name_to_id
 
