@@ -224,7 +224,7 @@ def create_model(
             mix_choice=model_config.mix_choice,
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
-            sequential_fusion=model_config.sequential_fusion,
+            sequential_fusion=model_config.sequential_fusion
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
