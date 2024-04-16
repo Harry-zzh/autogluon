@@ -381,7 +381,10 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         )
 
     def infer_column_types(
-        self, column_types: Optional[Dict] = None, data: Optional[pd.DataFrame] = None, is_train=True
+        self, column_types: Optional[Dict] = None, data: Optional[pd.DataFrame] = None, is_train=True,
+        use_image_only: Optional[bool] = False,
+        use_text_only: Optional[bool] = False,
+        use_tabular_only: Optional[bool] = False,
     ):
         if is_train and self._fit_called:
             return
@@ -392,6 +395,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                 label_columns=self._label_column,
                 provided_column_types=column_types,
                 problem_type=self._problem_type,  # used to update the corresponding column type
+                use_image_only=use_image_only,
+                use_text_only=use_text_only,
+                use_tabular_only=use_tabular_only,
             )
             logger.debug(f"column_types: {self._column_types}")
             logger.debug(f"image columns: {[k for k, v in self._column_types.items() if v == 'image_path']}")
@@ -403,6 +409,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                 problem_type=self._problem_type,
                 allowable_column_types=allowable_dtypes,
                 fallback_column_type=fallback_dtype,
+                use_image_only=use_image_only,
+                use_text_only=use_text_only,
+                use_tabular_only=use_tabular_only,
             )
         else:
             return column_types
@@ -628,6 +637,10 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         standalone: Optional[bool] = True,
         hyperparameter_tune_kwargs: Optional[Dict] = None,
         clean_ckpts: Optional[bool] = True,
+        # 为了只保留一个模态的数据
+        use_image_only: Optional[bool] = False,
+        use_text_only: Optional[bool] = False,
+        use_tabular_only: Optional[bool] = False,
         **kwargs,
     ):
         self.setup_save_path(save_path=save_path)
@@ -642,7 +655,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             holdout_frac=holdout_frac,
             seed=seed,
         )
-        self.infer_column_types(column_types=column_types)
+        self.infer_column_types(column_types=column_types, use_image_only=use_image_only, use_tabular_only=use_tabular_only, use_text_only=use_text_only)
         self.infer_output_shape()
         self.infer_validation_metric()
         self.update_hyperparameters(
