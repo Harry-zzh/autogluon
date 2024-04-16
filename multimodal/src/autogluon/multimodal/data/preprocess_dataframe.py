@@ -463,7 +463,7 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
                     template = self._config.categorical.convert_to_text_use_header_template
                     if template == "list": # 默认是list template
                         processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + ": " + str(ele))
-                    elif template == "text": 
+                    elif template == "text" or template == "text_ques_suffix" or template == "text_declar_suffix": 
                         processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else col_name + " is " + str(ele))
                     elif template == "latex": # 这个应该要配合insert_sep=false，在外面判断
                         processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele) + " & ")
@@ -483,6 +483,14 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
             text_features[col_name] = processed_data.values.tolist()
             text_types[col_name] = col_type
 
+        if self._config.categorical.convert_to_text_use_header:
+            template = self._config.categorical.convert_to_text_use_header_template
+            if template == "text_ques_suffix": # 问句的形式，接在最后面。
+                text_features[template] = [f"then what is {self._label_column}?" for i in range(len(text_features[col_name]))]
+                text_types[template] = "text"
+            elif template == "text_declar_suffix": # 陈述句的形式。
+                text_features[template] = [f"then predict {self._label_column}." for i in range(len(text_features[col_name]))]
+                text_types[template] = "text"
         return text_features, text_types
 
     def transform_rois(
