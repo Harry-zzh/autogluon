@@ -11,7 +11,7 @@ from .base import AbstractMultimodalFusionModel
 from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 
 from omegaconf import OmegaConf, DictConfig
-# from .augment_network import AugmentNetwork
+from .augment_network import AugmentNetwork
 import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.augmenter = None
         self.aug_config = aug_config
         if aug_config != None and aug_config.turn_on:
+            self.adapter_out_dim = base_in_feat
             self.augmenter = self.construct_augnet()
 
         # init weights
@@ -154,6 +155,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.out_features = in_features
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
+
+        
 
     def construct_augnet(self):
         model_feature_dict = [
@@ -223,13 +226,13 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             if self.augmenter is not None:
                 # train augment network
                 aug_loss = {}
-                detached_feature = multimodal_features.detach().clone()  # [8, 512]
+                detached_feature = multimodal_features.detach().clone()  # [bs, dim]
 
                 new, m, v = self.augmenter(detached_feature)
-                regularize_loss = self.augmenter.l2_regularize(detached_feature, new)
+                regularize_loss = self.augmenter.l2_regularize(detached_feature, new) # vae的重构损失。
                 KLD_loss = (
                     self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
-                )
+                ) # vae正则化损失。
 
                 with torch.no_grad():
                     ori_logits = self.head(self.fusion_mlp(detached_feature))
@@ -254,7 +257,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 )
                 multimodal_features = torch.cat(
                     [multimodal_features, after_augment], dim=0
-                )
+                ) # 这里两维
 
         # features = self.fusion_mlp(multimodal_features)
         # logits = self.head(features)
@@ -285,13 +288,16 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         else:
              return features, logits, multimodal_logits
 
-    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor]):
+    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor], aug_loss=None):
         fusion_output = {
             self.prefix: {
                 LOGITS: logits,
                 FEATURES: features,
             }
         }
+        if aug_loss != None:
+            fusion_output["augmenter"] = aug_loss
+
         if self.loss_weight is not None:
             output = {}
             for per_model, per_logits in zip(self.model, multimodal_logits):
