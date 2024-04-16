@@ -381,7 +381,10 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         )
 
     def infer_column_types(
-        self, column_types: Optional[Dict] = None, data: Optional[pd.DataFrame] = None, is_train=True
+        self, column_types: Optional[Dict] = None, data: Optional[pd.DataFrame] = None, is_train=True,
+        use_image_only: Optional[bool] = False,
+        use_text_only: Optional[bool] = False,
+        use_tabular_only: Optional[bool] = False,
     ):
         if is_train and self._fit_called:
             return
@@ -392,6 +395,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                 label_columns=self._label_column,
                 provided_column_types=column_types,
                 problem_type=self._problem_type,  # used to update the corresponding column type
+                use_image_only=use_image_only,
+                use_text_only=use_text_only,
+                use_tabular_only=use_tabular_only,
             )
             logger.debug(f"column_types: {self._column_types}")
             logger.debug(f"image columns: {[k for k, v in self._column_types.items() if v == 'image_path']}")
@@ -403,6 +409,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                 problem_type=self._problem_type,
                 allowable_column_types=allowable_dtypes,
                 fallback_column_type=fallback_dtype,
+                use_image_only=use_image_only,
+                use_text_only=use_text_only,
+                use_tabular_only=use_tabular_only,
             )
         else:
             return column_types
@@ -628,18 +637,25 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         standalone: Optional[bool] = True,
         hyperparameter_tune_kwargs: Optional[Dict] = None,
         clean_ckpts: Optional[bool] = True,
+        # 为了只保留一个模态的数据
+        use_image_only: Optional[bool] = False,
+        use_text_only: Optional[bool] = False,
+        use_tabular_only: Optional[bool] = False,
         **kwargs,
     ):
         self.setup_save_path(save_path=save_path)
         training_start = self.on_fit_start(presets=presets, teacher_learner=teacher_learner)
         self.infer_problem_type(train_data=train_data)
+        # if self._problem_type not in [BINARY, MULTICLASS]:
+        #     self._config.model.fusion_mlp.augmenter.consist_loss = 0.0
+
         self.prepare_train_tuning_data(
             train_data=train_data,
             tuning_data=tuning_data,
             holdout_frac=holdout_frac,
             seed=seed,
         )
-        self.infer_column_types(column_types=column_types)
+        self.infer_column_types(column_types=column_types, use_image_only=use_image_only, use_tabular_only=use_tabular_only, use_text_only=use_text_only)
         self.infer_output_shape()
         self.infer_validation_metric()
         self.update_hyperparameters(
@@ -897,7 +913,13 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             image_lr=config.optimization.image_lr,
             text_lr=config.optimization.text_lr,
             tabular_lr=config.optimization.tabular_lr,
-            model_list=config.model.names # 为了之后不同模态用不同lr
+            model_list=config.model.names, # 为了之后不同模态用不同lr,
+            aug_optimizer=config.optimization.aug_optimizer,
+            aug_turn_on=config.optimization.aug_turn_on,
+            aug_lr=config.optimization.aug_learning_rate,
+            aug_optim_type=config.optimization.aug_optim_type,
+            aug_weight_decay=config.optimization.aug_weight_decay
+
         )
 
     def get_litmodule_per_run(
@@ -1108,32 +1130,61 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             blacklist_msgs = ["already configured with model summary"]
             log_filter = LogFilter(blacklist_msgs)
             with apply_log_filter(log_filter):
-                trainer = pl.Trainer(
-                    accelerator="gpu" if num_gpus > 0 else OmegaConf.select(config, "env.accelerator", default="auto"),
-                    devices=num_gpus if num_gpus > 0 else "auto",
-                    num_nodes=config.env.num_nodes,
-                    precision=precision,
-                    strategy=strategy if strategy else "auto",
-                    benchmark=False,
-                    deterministic=config.env.deterministic,
-                    max_epochs=config.optimization.max_epochs,
-                    max_steps=config.optimization.max_steps,
-                    max_time=max_time,
-                    callbacks=callbacks,
-                    logger=tb_logger,
-                    gradient_clip_val=gradient_clip_val,
-                    gradient_clip_algorithm=OmegaConf.select(
-                        config, "optimization.gradient_clip_algorithm", default="norm"
-                    ),
-                    accumulate_grad_batches=grad_steps,
-                    log_every_n_steps=OmegaConf.select(config, "optimization.log_every_n_steps", default=10),
-                    enable_progress_bar=enable_progress_bar,
-                    fast_dev_run=config.env.fast_dev_run,
-                    val_check_interval=config.optimization.val_check_interval,
-                    check_val_every_n_epoch=config.optimization.check_val_every_n_epoch
-                    if hasattr(config.optimization, "check_val_every_n_epoch")
-                    else 1,
-                    plugins=plugins,
+                if config.optimization.aug_optimizer:
+                    trainer = pl.Trainer(
+                        accelerator="gpu" if num_gpus > 0 else OmegaConf.select(config, "env.accelerator", default="auto"),
+                        devices=num_gpus if num_gpus > 0 else "auto",
+                        num_nodes=config.env.num_nodes,
+                        precision=precision,
+                        strategy=strategy if strategy else "auto",
+                        benchmark=False,
+                        deterministic=config.env.deterministic,
+                        max_epochs=config.optimization.max_epochs,
+                        max_steps=config.optimization.max_steps,
+                        max_time=max_time,
+                        callbacks=callbacks,
+                        logger=tb_logger,
+                        # gradient_clip_val=gradient_clip_val,
+                        # gradient_clip_algorithm=OmegaConf.select(
+                        #     config, "optimization.gradient_clip_algorithm", default="norm"
+                        # ),
+                        # accumulate_grad_batches=grad_steps,
+                        log_every_n_steps=OmegaConf.select(config, "optimization.log_every_n_steps", default=10),
+                        enable_progress_bar=enable_progress_bar,
+                        fast_dev_run=config.env.fast_dev_run,
+                        val_check_interval=config.optimization.val_check_interval,
+                        check_val_every_n_epoch=config.optimization.check_val_every_n_epoch
+                        if hasattr(config.optimization, "check_val_every_n_epoch")
+                        else 1,
+                        plugins=plugins,
+                    )
+                else:
+                    trainer = pl.Trainer(
+                        accelerator="gpu" if num_gpus > 0 else OmegaConf.select(config, "env.accelerator", default="auto"),
+                        devices=num_gpus if num_gpus > 0 else "auto",
+                        num_nodes=config.env.num_nodes,
+                        precision=precision,
+                        strategy=strategy if strategy else "auto",
+                        benchmark=False,
+                        deterministic=config.env.deterministic,
+                        max_epochs=config.optimization.max_epochs,
+                        max_steps=config.optimization.max_steps,
+                        max_time=max_time,
+                        callbacks=callbacks,
+                        logger=tb_logger,
+                        gradient_clip_val=gradient_clip_val,
+                        gradient_clip_algorithm=OmegaConf.select(
+                            config, "optimization.gradient_clip_algorithm", default="norm"
+                        ),
+                        accumulate_grad_batches=grad_steps,
+                        log_every_n_steps=OmegaConf.select(config, "optimization.log_every_n_steps", default=10),
+                        enable_progress_bar=enable_progress_bar,
+                        fast_dev_run=config.env.fast_dev_run,
+                        val_check_interval=config.optimization.val_check_interval,
+                        check_val_every_n_epoch=config.optimization.check_val_every_n_epoch
+                        if hasattr(config.optimization, "check_val_every_n_epoch")
+                        else 1,
+                        plugins=plugins,
                 )
         else:
             blacklist_msgs = []

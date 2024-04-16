@@ -227,6 +227,7 @@ def create_model(
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
             sequential_fusion=model_config.sequential_fusion,
+            use_miss_token_embed=model_config.use_miss_token_embed
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
@@ -240,7 +241,8 @@ def create_model(
             tokenizer_name=model_config.tokenizer_name,
             use_fast=OmegaConf.select(model_config, "use_fast", default=True),
             early_fusion=model_config.early_fusion,
-            sequential_fusion=model_config.sequential_fusion
+            sequential_fusion=model_config.sequential_fusion,
+            use_miss_token_embed=model_config.use_miss_token_embed
         )
     elif model_name.lower().startswith(T_FEW):
         model = TFewModel(

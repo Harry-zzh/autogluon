@@ -15,7 +15,7 @@ from ..constants import LM_TARGET, LOGITS, T_FEW, TEMPLATE_LOGITS, WEIGHT
 from ..data.mixup import MixupModule, multimodel_mixup
 from ..models.utils import run_model
 from .semantic_seg_metrics import COD, Balanced_Error_Rate
-from .utils import apply_layerwise_lr_decay, apply_single_lr, apply_two_stages_lr, get_lr_scheduler, get_optimizer
+from .utils import apply_layerwise_lr_decay, apply_single_lr, apply_two_stages_lr, get_lr_scheduler, get_optimizer, get_augment_network_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,12 @@ class LitModule(pl.LightningModule):
         text_lr:Optional[float] = None,
         tabular_lr:Optional[float] = None,
         model_list: Optional[List] = None,
+        aug_optimizer: Optional[bool] = False,
+        aug_turn_on: Optional[bool] = False,
+        aug_lr: Optional[float] = None,
+        aug_optim_type: Optional[str] = None,
+        aug_weight_decay: Optional[float] = None,
+        grad_steps: Optional[int] = 1,
     ):
         """
         Parameters
@@ -149,6 +155,8 @@ class LitModule(pl.LightningModule):
         self.trainable_param_names = trainable_param_names if trainable_param_names else []
         self.skip_final_val = skip_final_val
         self.track_grad_norm = track_grad_norm
+        if aug_optimizer:
+            self.automatic_optimization = False
 
     def _compute_template_loss(
         self,
@@ -190,8 +198,22 @@ class LitModule(pl.LightningModule):
     ):
         loss = 0
         for _, per_output in output.items():
+            if _ == "augmenter": continue
             weight = per_output[WEIGHT] if WEIGHT in per_output else 1
             if (
+                    _.startswith("fusion")
+                    and self.model.training
+                    and self.model.aug_config.turn_on
+                ):
+
+                    loss += (
+                        self.loss_func(
+                            input=per_output[LOGITS].squeeze(dim=1),
+                            target=label.tile((2,)),
+                        )
+                    )
+                    self.log("loss/target", loss, prog_bar=True)
+            elif (
                 TEMPLATE_LOGITS in per_output and self.model.prefix == T_FEW
             ):  # Do only add template loss if T-Few. #TODO Add compatibility to Fusion models.
                 loss += self._compute_template_loss(per_output, label) * weight
@@ -203,6 +225,23 @@ class LitModule(pl.LightningModule):
                     )
                     * weight
                 )
+        if "augmenter" in output.keys():
+            reg_loss = 0
+            kl_loss = 0
+            c_loss = 0
+            l = output["augmenter"]
+            if "KLD_loss" in l.keys():
+                kl_loss = l["KLD_loss"] * l["kl_weight"]
+            if "regularizer" in l.keys():
+                reg_loss = l["regularizer"] * l["reg_weight"]
+            if "consist_loss" in l.keys():
+                c_loss = l["consist_loss"] * l["cons_weight"]
+                self.log("loss/consist", c_loss, prog_bar=True)
+
+            self.log("loss/reg_loss", reg_loss, prog_bar=True)
+            self.log("loss/kl_loss", kl_loss, prog_bar=True)
+
+            loss = loss + reg_loss + kl_loss + c_loss
         return loss
 
     def _compute_metric_score(
@@ -258,8 +297,33 @@ class LitModule(pl.LightningModule):
         -------
         Average loss of the mini-batch data.
         """
-        output, loss = self._shared_step(batch)
-        self.log("train_loss", loss)
+        if self.hparams.aug_optimizer:
+            if self.hparams.aug_turn_on:
+                target_optimizer, aug_optimizer = self.optimizers()
+            else:
+                target_optimizer = self.optimizers()
+            target_opt_scheduler = self.lr_schedulers()
+
+            output, loss = self._shared_step(batch)
+            self.manual_backward(loss)
+
+            # gradient accumulation
+            if (
+                batch_idx + 1
+            ) % self.hparams.grad_steps == 0 or self.trainer.is_last_batch:
+                nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+                target_optimizer.step()
+                target_opt_scheduler.step()
+                if self.hparams.aug_turn_on:
+                    aug_optimizer.step()
+
+                target_optimizer.zero_grad()
+                if self.hparams.aug_turn_on:
+                    aug_optimizer.zero_grad()
+        else:
+            output, loss = self._shared_step(batch)
+            self.log("train_loss", loss)
         return loss
 
     def on_validation_start(self) -> None:
@@ -367,6 +431,7 @@ class LitModule(pl.LightningModule):
                 lr_decay=self.hparams.lr_decay,
                 efficient_finetune=self.hparams.efficient_finetune,
                 trainable_param_names=self.trainable_param_names,
+                seperate_augment_optimizer=self.hparams.aug_optimizer,
                 **kwargs,
             )
         else:
@@ -419,11 +484,29 @@ class LitModule(pl.LightningModule):
         )
 
         sched = {"scheduler": scheduler, "interval": "step"}
-        logger.debug("done configuring optimizer and scheduler")
 
         for k, v in self.model.named_parameters():
             if v.requires_grad:
                 print(k)
+
+        aug_optimizer = None
+        if self.hparams.aug_optimizer and self.hparams.aug_turn_on:
+            print("initilize augment optimizer")
+            # augment network optimizer
+            aug_grouped_parameters = get_augment_network_parameters(
+                self.model, self.hparams.aug_lr
+            )
+            aug_optimizer = get_optimizer(
+                optim_type=self.hparams.aug_optim_type,
+                optimizer_grouped_parameters=aug_grouped_parameters,
+                lr=self.hparams.aug_lr,
+                weight_decay=self.hparams.aug_weight_decay,
+            )
+            return [optimizer, aug_optimizer], [sched]
+
+        logger.debug("done configuring optimizer and scheduler")
+
+        
         return [optimizer], [sched]
 
     def on_before_optimizer_step(self, optimizer):

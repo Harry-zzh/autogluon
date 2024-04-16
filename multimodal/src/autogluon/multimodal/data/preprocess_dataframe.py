@@ -318,6 +318,8 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
             # Just in case X accidentally contains the label column
             if col_name == self._label_column:
                 continue
+            if col_name not in self._column_types: # 这里是因为类似text only这种设置，column_type可能不匹配
+                continue
             col_type = self._column_types[col_name]
             logger.debug(f'Process col "{col_name}" with type "{col_type}"')
             col_value = X[col_name]

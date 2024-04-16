@@ -50,3 +50,8 @@ optimization:
     loss_mask_weight: 5.0
     loss_dice_weight: 5.0
   extra_trainable_params: []
+  aug_optimizer: False
+  aug_turn_on: True
+  aug_learning_rate: 1.0e-4
+  aug_optim_type: "adam"
+  aug_weight_decay: 1.0e-5

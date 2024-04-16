@@ -133,6 +133,9 @@ class TextProcessor:
         if self.normalize_text:
             register_encoding_decoding_error_handlers()
 
+        # 是否要对缺失token使用embedding
+        self.use_miss_token_embed = (model.model.miss_token_embed != None)
+
     @property
     def text_token_ids_key(self):
         return f"{self.prefix}_{TEXT_TOKEN_IDS}"
@@ -207,6 +210,11 @@ class TextProcessor:
             # Otherwise, the tokens will be combined as
             # [CLS] [Field1 Tokens] [SEP] [Field2 Tokens] [SEP] [Field3 Tokens] [EOS]
             max_length += 1
+
+        if self.use_miss_token_embed:
+            for k, v in text_tokens.items():
+                if len(v) == 0:
+                    text_tokens[k] = np.array([-1])
 
         text_tokens_list = []
         text_template_keys = ["text_ques_suffix"]
@@ -320,11 +328,15 @@ class TextProcessor:
                 )["input_ids"]
                 tokens[col_name] = answer_ids
                 continue
+            
+            if type(col_text) == list and len(col_text) == 1:
+                col_text = col_text[0]
             col_tokens = self.tokenizer.encode(
                 col_text,
                 add_special_tokens=False,
                 truncation=False,
             )
+
             tokens[col_name] = np.array(col_tokens, dtype=np.int32)
         # build token sequence
         return self.build_one_token_sequence(tokens)

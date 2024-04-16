@@ -118,6 +118,100 @@ def forward_for_sequential_fusion(
     )
 
 
+# 如果允许miss token用miss embedding
+def forward_for_miss_token(
+    self,
+    input_ids: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    token_type_ids: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.Tensor] = None,
+    inputs_embeds: Optional[torch.Tensor] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    pre_state: Optional[torch.Tensor] = None,
+):
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if input_ids is not None and inputs_embeds is not None:
+        raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+    elif input_ids is not None:
+        input_shape = input_ids.size()
+    elif inputs_embeds is not None:
+        input_shape = inputs_embeds.size()[:-1]
+    else:
+        raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+    device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+    if attention_mask is None:
+        attention_mask = torch.ones(input_shape, device=device)
+
+    if token_type_ids is None:
+        token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+    
+    # 为-1的位置
+    indices = torch.eq(input_ids, -1)
+    input_ids[indices] = 0
+
+    embedding_output = self.embeddings(
+        input_ids=input_ids,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        mask=attention_mask,
+        inputs_embeds=inputs_embeds,
+    ) # b * L * d
+
+    if torch.any(indices).item() == True:
+        # 用miss_token_embed去替换
+        embedding_output[indices] = self.miss_token_embed(torch.tensor(0).to(embedding_output.device))
+
+    if pre_state != None:
+        attention_mask = torch.cat((attention_mask, torch.ones((attention_mask.size()[0], 1), device=device)), dim=1)
+    if pre_state != None:
+        embedding_output = torch.cat((pre_state.unsqueeze(1), embedding_output), dim=1)
+    encoder_outputs = self.encoder(
+        embedding_output,
+        attention_mask,
+        output_hidden_states=True,
+        output_attentions=output_attentions,
+        return_dict=return_dict,
+    )
+    encoded_layers = encoder_outputs[1]
+
+    if self.z_steps > 1:
+        hidden_states = encoded_layers[-2]
+        layers = [self.encoder.layer[-1] for _ in range(self.z_steps)]
+        query_states = encoded_layers[-1]
+        rel_embeddings = self.encoder.get_rel_embedding()
+        attention_mask = self.encoder.get_attention_mask(attention_mask)
+        rel_pos = self.encoder.get_rel_pos(embedding_output)
+        for layer in layers[1:]:
+            query_states = layer(
+                hidden_states,
+                attention_mask,
+                output_attentions=False,
+                query_states=query_states,
+                relative_pos=rel_pos,
+                rel_embeddings=rel_embeddings,
+            )
+            encoded_layers.append(query_states)
+
+    sequence_output = encoded_layers[-1]
+
+    if not return_dict:
+        return (sequence_output,) + encoder_outputs[(1 if output_hidden_states else 2) :]
+
+    return BaseModelOutput(
+        last_hidden_state=sequence_output,
+        hidden_states=encoder_outputs.hidden_states if output_hidden_states else None,
+        attentions=encoder_outputs.attentions,
+    )
+
 class HFAutoModelForTextPrediction(nn.Module):
     """
     Support huggingface text backbones.
@@ -137,6 +231,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         use_fast: Optional[bool] = True,
         early_fusion: bool = False,
         sequential_fusion: bool = False,
+        use_miss_token_embed: bool = False,
     ):
         """
         Load a pretrained huggingface text transformer backbone.
@@ -187,9 +282,9 @@ class HFAutoModelForTextPrediction(nn.Module):
         )
         self.tokenizer_name = tokenizer_name
         self.tokenizer = get_pretrained_tokenizer(
-            tokenizer_name=self.tokenizer_name,
-            checkpoint_name=self.checkpoint_name,
-            use_fast=use_fast,
+            tokenizer_name=self.tokenizer_name, # hf_auto
+            checkpoint_name=self.checkpoint_name, # 'microsoft/deberta-v3-base'
+            use_fast=use_fast, # True
         )
 
         if self.sequential_fusion:
@@ -219,6 +314,14 @@ class HFAutoModelForTextPrediction(nn.Module):
         self.prefix = prefix
         self.pooling_mode = pooling_mode
 
+        if use_miss_token_embed:
+            use_miss_token_embed_forward = forward_for_miss_token.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward", use_miss_token_embed_forward)
+            self.model.miss_token_embed = nn.Embedding(1, self.model.config.hidden_size)
+        else:
+            self.model.miss_token_embed = None
+
+
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
@@ -233,6 +336,7 @@ class HFAutoModelForTextPrediction(nn.Module):
                 if "embed" not in n:
                     p.requires_grad = False
 
+        
     @property
     def text_token_ids_key(self):
         return f"{self.prefix}_{TEXT_TOKEN_IDS}"
@@ -293,6 +397,8 @@ class HFAutoModelForTextPrediction(nn.Module):
 
         steps = torch.arange(0, text_token_ids.shape[1]).type_as(text_valid_length)
         text_masks = (steps.reshape((1, -1)) < text_valid_length.reshape((-1, 1))).type_as(text_token_ids)
+
+        # text_token_ids[torch.eq(text_token_ids, -1)] = 0
 
         if not self.early_fusion:
             if self.is_t5:

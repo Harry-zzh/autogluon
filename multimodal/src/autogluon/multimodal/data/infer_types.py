@@ -475,6 +475,9 @@ def infer_column_types(
     fallback_column_type: Optional[str] = None,
     id_mappings: Optional[Union[Dict[str, Dict], Dict[str, pd.Series]]] = None,
     problem_type: Optional[str] = None,
+    use_text_only: Optional[bool] = False,
+    use_image_only: Optional[bool] = False,
+    use_tabular_only: Optional[bool] = False, # 一般和上两行配合着用
 ) -> Dict:
     """
     Infer the column types of a multimodal pd.DataFrame.
@@ -592,6 +595,26 @@ def infer_column_types(
             data=data,
             valid_data=valid_data if is_training else None,
         )
+    keep_modalities = [] # 要保存的模态
+    if use_text_only:
+        keep_modalities.append("text")
+    if use_image_only:
+        keep_modalities.append("image")
+    if use_tabular_only:
+        keep_modalities.append("categorical")
+        keep_modalities.append("numerical")
+
+    if len(keep_modalities):
+        drop_column_names = []
+        new_column_types = collections.OrderedDict()
+        for keep_modality in keep_modalities:
+            for k, v in column_types.items():
+                if keep_modality not in v and k not in label_columns:
+                    drop_column_names.append(k)
+                else:
+                    new_column_types[k] = v
+        data = data.drop(columns=drop_column_names)
+        column_types = new_column_types
 
     return column_types
 
