@@ -194,6 +194,7 @@ model:
       # - "random_delete(0.05)"        # less than 0.1 based on eda paper
       # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       # - "insert_punc(0.05)"
+    use_miss_token_embed: False
   clip_fusion_mlp:
     checkpoint_name: "openai/clip-vit-base-patch32"
     data_types:
@@ -221,6 +222,7 @@ model:
       # - "random_delete(0.05)"        # less than 0.1 based on eda paper
       # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       # - "insert_punc(0.05)"
+    use_miss_token_embed: False
   fusion_mlp:
     weight: 0.1
     adapt_in_features: "max"
