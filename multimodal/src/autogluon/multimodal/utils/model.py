@@ -207,6 +207,7 @@ def create_model(
             num_classes=num_classes,
             pretrained=pretrained,
             tokenizer_name=model_config.tokenizer_name,
+            use_miss_token_embed=model_config.use_miss_token_embed
         )
     elif model_name.lower().startswith(CLIP):
         model = CLIPForImageText(
