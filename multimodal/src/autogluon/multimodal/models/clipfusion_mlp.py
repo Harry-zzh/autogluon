@@ -64,7 +64,7 @@ class CLIPForImageText_fusionmlp(nn.Module):
         self.checkpoint_name = checkpoint_name
         self.num_classes = num_classes
 
-        self.config, self.model = get_hf_config_and_model(checkpoint_name=checkpoint_name, pretrained=pretrained)
+        self.config, self.model = get_hf_config_and_model(checkpoint_name=checkpoint_name, pretrained=pretrained) # 默认是clip-base
         self.tokenizer_name = tokenizer_name
         self.tokenizer = get_pretrained_tokenizer(
             tokenizer_name=self.tokenizer_name,

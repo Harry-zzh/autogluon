@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 # Stores the class names of the timm backbones that support variable input size. You can add more backbones to the list.
 SUPPORT_VARIABLE_INPUT_SIZE_TIMM_CLASSES = {"convnext", "efficientnet", "mobilenetv3", "regnet", "resnet"}
 
+# miss token
+def forward_for_miss_token(self, x, image_valid_num):
+    x = self.forward_features(x, image_valid_num)
+    x = self.forward_head(x)
+    return x
+
+# miss token
+def forward_feature_for_miss_token(self, x, image_valid_num):
+    x = self.patch_embed(x)
+    B, H, W, C = x.size()
+    for idx, v in enumerate(image_valid_num): # 换成miss token
+        if v.item() == 0:
+            x[idx] = self.miss_token_embed(torch.tensor(0).to(x.device)).reshape(H,W,C)
+    
+    x = self.layers(x)
+    x = self.norm(x)
+    return x
+
+
 def forward_sequential_fusion(self, x, state = None):
     if state != None:
         x, state = self.forward_features(x, state)
@@ -213,7 +232,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
         mix_choice: Optional[str] = "all_logits",
         pretrained: Optional[bool] = True,
         early_fusion = False,
-        sequential_fusion=False
+        sequential_fusion=False,
+        use_miss_token_embed=False
     ):
         """
         Load a pretrained image backbone from TIMM.
@@ -297,7 +317,17 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
                     window_attn_forward = forward_window_attn_seq_fusion.__get__(block.attn, block.attn.__class__)
                     setattr(block.attn, "forward", window_attn_forward)
-
+        # miss token
+        if use_miss_token_embed:
+            use_miss_token_embed_forward = forward_for_miss_token.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward", use_miss_token_embed_forward)
+           
+            use_miss_token_embed_feature_forward = forward_feature_for_miss_token.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward_features", use_miss_token_embed_feature_forward)
+            self.model.miss_token_embed = nn.Embedding(1, 56*56*192)
+        else:
+            self.model.miss_token_embed = None
+        self.use_miss_token_embed = use_miss_token_embed
 
 
         self.name_to_id = self.get_layer_ids()
@@ -378,37 +408,46 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         elif self.mix_choice == "all_logits":  # mix outputs
             b, n, c, h, w = images.shape
+
             if pre_state != None:
                 features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
+            elif self.use_miss_token_embed:
+                features = self.model(images.reshape((b * n, c, h, w)), image_valid_num) 
             else:
                 features = self.model(images.reshape((b * n, c, h, w))) 
             if self.num_classes > 0:
                 logits = self.head(features)
             steps = torch.arange(0, n).type_as(image_valid_num)
-            image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(features)  # (b, n)
-            features = features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
 
-            batch = {
-                self.image_key: images,
-                self.image_valid_num_key: image_valid_num,
-            }
-            if image_column_names:
-                assert len(image_column_names) == len(image_column_indices), "invalid image column inputs"
-                for idx, name in enumerate(image_column_names):
-                    batch[name] = image_column_indices[idx]
+            ###  如果要用missing token，那么不要image_masks!!!
+            if not self.use_miss_token_embed:
+                image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(features)  # (b, n)
+                features = features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
 
-            # collect features by image column names
-            column_features, column_feature_masks = get_column_features(
-                batch=batch,
-                column_name_prefix=self.image_column_prefix,
-                features=features,
-                valid_lengths=image_valid_num,
-            )
+                batch = {
+                    self.image_key: images,
+                    self.image_valid_num_key: image_valid_num,
+                }
+                if image_column_names:
+                    assert len(image_column_names) == len(image_column_indices), "invalid image column inputs"
+                    for idx, name in enumerate(image_column_names):
+                        batch[name] = image_column_indices[idx]
 
-            features = features.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_features)
+                # collect features by image column names
+                column_features, column_feature_masks = get_column_features(
+                    batch=batch,
+                    column_name_prefix=self.image_column_prefix,
+                    features=features,
+                    valid_lengths=image_valid_num,
+                )
+
+                features = features.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_features)
+            else:
+                column_features = {} 
             if self.num_classes > 0:
-                logits = logits.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_classes)
-                logits = logits.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_classes)
+                if not self.use_miss_token_embed:
+                    logits = logits.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_classes)
+                    logits = logits.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_classes)
             else:
                 logits = features
 

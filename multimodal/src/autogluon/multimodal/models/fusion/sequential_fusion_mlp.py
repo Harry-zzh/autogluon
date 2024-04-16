@@ -237,7 +237,8 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             # else:
             # features 通常是cls token
             if cur_model_idx == len(self.model):
-                multimodal_features = per_output[per_model.prefix][FEATURES] # 取最后一步的state
+                # multimodal_features = per_output[per_model.prefix][FEATURES] # 取最后一步的state
+                multimodal_features = per_output[per_model.prefix]["state"] # 取最后一步的state
             
             multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)
