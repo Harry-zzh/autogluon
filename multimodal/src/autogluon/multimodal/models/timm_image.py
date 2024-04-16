@@ -63,17 +63,15 @@ def forward_sequential_fusion(self, x, state = None):
 def forward_feature_sequential_fusion(self, x, state= None):
     x = self.patch_embed(x)
     B, H, W, C = x.size()
-
-    # x= self.layers(x, state)
-
-    for idx, layer in enumerate(self.layers):
-        x = layer(x, state)
+    
+    for layer in self.layers[0:-1]:
+        x = layer(x)
 
     # if state != None: # 只弄最后一个stage？
     #     x = x.reshape(B, -1, C)
     #     state = state.expand(B, -1, -1)
     #     x = torch.cat((state, x), dim=1)
-    # x = self.layers[-1](x, state)
+    x = self.layers[-1](x, state)
 
     x = self.norm(x)
     if state != None:
@@ -83,19 +81,17 @@ def forward_feature_sequential_fusion(self, x, state= None):
     return x
 
 def forward_transformer_stage_sequential_fusion(self, x, state =None): 
-    if x.dim() == 3: # 有state
-        state = x[:, 0, :]
-        x = x[:, 1:, :]
-        B, L, C = x.size()
-        H = W = int(math.sqrt(L))
-        x = x.reshape(B, H, W, C)
+    # if x.dim() == 3: # 有state
+    #     state = x[:, 0, :]
+    #     x = x[:, 1:, :]
+    # else:
+    #     state = None
     
     x = self.downsample(x)
 
     B, H, W, C = x.size()
     if state != None:
         x = x.reshape(B, -1, C)
-        state = self.state_adapter(state)
         state = state.unsqueeze(1)
         x = torch.cat((state, x), dim=1)
 
@@ -299,20 +295,18 @@ class TimmAutoModelForImagePrediction(nn.Module):
                     # depths: 2, 2, 18, 2
                     self.model = create_model(self.checkpoint_name, checkpoint_path=checkpoint_path, num_classes=0)
                     # create a head with new num_classes
-                    if not early_fusion:
-                        self.head = (
-                            Linear(in_features=self.config["num_features"], out_features=num_classes)
-                            if num_classes > 0
-                            else nn.Identity()
-                        )
+                    self.head = (
+                        Linear(in_features=self.config["num_features"], out_features=num_classes)
+                        if num_classes > 0
+                        else nn.Identity()
+                    )
                     self.num_classes = num_classes if num_classes is not None else 0
             except:
                 raise ValueError(f"Timm model path {checkpoint_name} does not exist or model is invalid.")
         else:
             self.checkpoint_name = checkpoint_name
             self.model = create_model(checkpoint_name, pretrained=pretrained, num_classes=num_classes)
-            if not early_fusion:
-                self.head = get_model_head(model=self.model)
+            self.head = get_model_head(model=self.model)
             self.config = self.model.default_cfg
             self.num_classes = self.model.num_classes
 
@@ -344,10 +338,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
             for layer in self.model.layers:
                 layer_forward = forward_transformer_stage_sequential_fusion.__get__(layer, layer.__class__)
                 setattr(layer, "forward", layer_forward)
-                if isinstance(layer.downsample,nn.Identity):
-                    layer.state_adapter = nn.Identity()
-                else:
-                    layer.state_adapter = nn.Linear(layer.downsample.dim, layer.downsample.out_dim)
 
                 for block in layer.blocks:
                     block_forward = forward_block_sequential_fusion.__get__(block, block.__class__)
@@ -377,7 +367,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         self.use_miss_token_embed = use_miss_token_embed
 
-        self.early_fusion = early_fusion
+
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
@@ -578,12 +568,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
     ):
-        if self.early_fusion:
-            return {
-                self.prefix: {
-                    FEATURES: features,
-                }
-            }
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
         if self.manifold_mixup and self.training:
             ret["manifold_mixup_lam"] = self.manifold_mixup_lam
@@ -638,11 +622,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
             for k in name_to_id.keys():
                 if "embed" not in k:
                     name_to_id[k] = 5 # Just set a random number, avoid introducing extra trainable parameters when setting optimizer for early fusion
-
-        if self.early_fusion:
-            for k in name_to_id.keys():
-                if "embed" not in k:
-                    name_to_id[k] = 5 # 随便设置一个数，只是为了early fusion设置opt的时候不要引入多余的可训练参数
 
         return name_to_id
 
