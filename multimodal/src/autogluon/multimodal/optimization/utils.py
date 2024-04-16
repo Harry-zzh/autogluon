@@ -84,6 +84,22 @@ from .semantic_seg_metrics import COD_METRICS_NAMES, Balanced_Error_Rate, Binary
 logger = logging.getLogger(__name__)
 
 
+def get_augment_network_parameters(
+    model: nn.Module,
+    lr: float,
+    return_params: Optional[bool] = True,
+):
+    print(f"augmentation learning rate:{lr}")
+    grouped_parameters = [
+        {
+            "params": [p if return_params else n for n, p in model.named_parameters() if "augmenter" in n],
+            "weight_decay": 0.0,
+            "lr": lr,
+        },
+    ]
+
+    return grouped_parameters
+
 def get_loss_func(
     problem_type: str,
     mixup_active: Optional[bool] = None,
@@ -732,6 +748,7 @@ def apply_layerwise_lr_decay(
     weight_decay: float,
     efficient_finetune: Optional[str] = None,
     trainable_param_names: Optional[List] = None,
+    seperate_augment_optimizer: Optional[bool] = False,
 ):
     """
     Assign monotonically decreasing learning rates for layers from the output end to the input end.
@@ -775,6 +792,9 @@ def apply_layerwise_lr_decay(
             and not any([re.match(trainable_param_name, name) for trainable_param_name in trainable_param_names])
         ):
             param.requires_grad = False
+
+        if seperate_augment_optimizer and "augmenter" in name:
+            continue
 
         if not param.requires_grad:
             continue  # frozen weights
