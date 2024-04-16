@@ -207,8 +207,18 @@ class TextProcessor:
             # Otherwise, the tokens will be combined as
             # [CLS] [Field1 Tokens] [SEP] [Field2 Tokens] [SEP] [Field3 Tokens] [EOS]
             max_length += 1
+
+        text_tokens_list = []
+        text_template_keys = ["text_ques_suffix"]
+        for txt_token_key, txt_token in text_tokens.items():
+            if txt_token_key not in text_template_keys:
+                text_tokens_list.append(len(txt_token))
+        if "text_ques_suffix" in text_tokens: # 确保在最后面
+            text_tokens_list.append(len(text_tokens["text_ques_suffix"]))
+
         trimmed_lengths = self.get_trimmed_lengths(
-            [len(txt_token) for txt_token in text_tokens.values()],
+            # [len(txt_token) for txt_token in text_tokens.values()],
+            text_tokens_list,
             max_length,
             do_merge=True,
         )
