@@ -9,6 +9,7 @@ import numpy as np
 from nptyping import NDArray
 from omegaconf import DictConfig
 from torch import nn
+import torch
 
 from ..constants import CHOICES_IDS, COLUMN, TEXT, TEXT_SEGMENT_IDS, TEXT_TOKEN_IDS, TEXT_VALID_LENGTH
 from .collator import PadCollator, StackCollator
@@ -46,6 +47,7 @@ class TextProcessor:
         train_augment_types: Optional[List[str]] = None,
         template_config: Optional[DictConfig] = None,
         normalize_text: Optional[bool] = False,
+        modality_drop_ratio: float=0.
     ):
         """
         Parameters
@@ -132,6 +134,9 @@ class TextProcessor:
 
         if self.normalize_text:
             register_encoding_decoding_error_handlers()
+
+        # modality dropout
+        self.modality_drop_rate = modality_drop_ratio
 
     @property
     def text_token_ids_key(self):
@@ -317,6 +322,12 @@ class TextProcessor:
             
             if type(col_text) == list and len(col_text) == 1:
                 col_text = col_text[0]
+
+            if is_training and self.modality_drop_rate > 0.:
+                dropout_probs = torch.empty(1).uniform_()
+                if dropout_probs[0] <= self.modality_drop_rate:
+                    col_text = ""
+
             col_tokens = self.tokenizer.encode(
                 col_text,
                 add_special_tokens=False,
