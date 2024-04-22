@@ -911,6 +911,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         optimization_kwargs=dict(),
         distillation_kwargs=dict(),
         is_train=True,
+        grad_steps=1
     ):
         if is_train:
             if self._teacher_learner is not None:
@@ -925,12 +926,14 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                     model=model,
                     model_postprocess_fn=model_postprocess_fn,
                     trainable_param_names=peft_param_names,
+                    grad_steps=grad_steps,
                     **optimization_kwargs,
                 )
         else:
             return LitModule(
                 model=self._model,
                 model_postprocess_fn=self._model_postprocess_fn,
+                grad_steps=grad_steps,
                 **optimization_kwargs,
             )
 
@@ -1326,19 +1329,22 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             loss_func=loss_func,
             mixup_func=mixup_func,
         )
+        num_gpus, strategy = self.get_num_gpus_and_strategy_per_run(config=config)
+        grad_steps = self.get_grad_steps(num_gpus=num_gpus, config=config)
         litmodule = self.get_litmodule_per_run(
             model=model,
             model_postprocess_fn=model_postprocess_fn,
             peft_param_names=peft_param_names,
             optimization_kwargs=optimization_kwargs,
             distillation_kwargs=distillation_kwargs,
+            grad_steps=grad_steps 
         )
         callbacks = self.get_callbacks_per_run(save_path=save_path, config=config, litmodule=litmodule)
         plugins = self.get_plugins_per_run(model=model, peft_param_names=peft_param_names)
         tb_logger = self.get_tb_logger(save_path=save_path)
-        num_gpus, strategy = self.get_num_gpus_and_strategy_per_run(config=config)
+        # num_gpus, strategy = self.get_num_gpus_and_strategy_per_run(config=config)
         precision = self.get_precision_per_run(num_gpus=num_gpus, precision=config.env.precision)
-        grad_steps = self.get_grad_steps(num_gpus=num_gpus, config=config)
+        # grad_steps = self.get_grad_steps(num_gpus=num_gpus, config=config)
         config = self.post_update_config_per_run(
             config=config,
             num_gpus=num_gpus,

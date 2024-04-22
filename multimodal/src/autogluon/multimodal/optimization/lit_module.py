@@ -301,6 +301,7 @@ class LitModule(pl.LightningModule):
             target_opt_scheduler = self.lr_schedulers()
 
             output, loss = self._shared_step(batch)
+            loss = loss / self.hparams.grad_steps
             self.manual_backward(loss)
 
             # gradient accumulation
