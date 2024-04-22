@@ -787,7 +787,8 @@ def apply_layerwise_lr_decay(
     decay_param_names = get_weight_decay_param_names(model)
 
     ## 更新一下model_list ，把fusion去掉
-    model_list = [model_name for model_name in model_list if "fusion" not in model_name ]
+    if model_list != None:
+        model_list = [model_name for model_name in model_list if "fusion" not in model_name ]
 
     for name, param in model.named_parameters():
         if name.startswith("_orig_mod."):
