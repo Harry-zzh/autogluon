@@ -234,6 +234,7 @@ model:
       consist_loss_weight: 0.01
       consist_t: 0.5
     use_miss_token_embed: False
+    alignment_loss: None
   sequential_fusion_mlp:
     weight: 0.1
     adapt_in_features: "max"

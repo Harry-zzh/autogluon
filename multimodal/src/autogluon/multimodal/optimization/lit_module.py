@@ -194,7 +194,7 @@ class LitModule(pl.LightningModule):
     ):
         loss = 0
         for _, per_output in output.items():
-            if _ == "augmenter": continue
+            if _ == "augmenter" or _ == "alignment_loss": continue
             weight = per_output[WEIGHT] if WEIGHT in per_output else 1
             if (
                     _.startswith("fusion")
@@ -238,6 +238,9 @@ class LitModule(pl.LightningModule):
             self.log("loss/kl_loss", kl_loss, prog_bar=True)
 
             loss = loss + reg_loss + kl_loss + c_loss
+        if "alignment_loss" in output.keys():
+            loss = loss + output["alignment_loss"]
+            self.log("loss/alignment_loss", output["alignment_loss"], prog_bar=True)
         return loss
 
     def _compute_metric_score(
