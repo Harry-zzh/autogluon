@@ -342,6 +342,7 @@ def create_model(
             normalization=model_config.normalization,
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
             aug_config=OmegaConf.select(model_config, "augmenter"),
+            alignment_loss=OmegaConf.select(model_config, "alignment_loss"),
         )
     elif model_name.lower().startswith(FUSION_METATRANSFORMER):
         # model = functools.partial(
