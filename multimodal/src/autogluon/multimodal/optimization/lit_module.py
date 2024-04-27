@@ -157,6 +157,9 @@ class LitModule(pl.LightningModule):
         self.track_grad_norm = track_grad_norm
         if aug_optimizer:
             self.automatic_optimization = False
+        # self.hparams.grad_steps = 1
+        # self.automatic_optimization = False
+        print("self.automatic_optimization: ", self.automatic_optimization)
 
     def _compute_template_loss(
         self,
@@ -315,7 +318,7 @@ class LitModule(pl.LightningModule):
             if (
                 batch_idx + 1
             ) % self.hparams.grad_steps == 0 or self.trainer.is_last_batch:
-                nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                # nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
                 target_optimizer.step()
                 target_opt_scheduler.step()
@@ -327,7 +330,23 @@ class LitModule(pl.LightningModule):
                     aug_optimizer.zero_grad()
         else:
             output, loss = self._shared_step(batch)
-            self.log("train_loss", loss)
+            if not self.automatic_optimization:
+                target_optimizer  = self.optimizers()
+                target_opt_scheduler = self.lr_schedulers()
+                loss = loss / self.hparams.grad_steps 
+                self.manual_backward(loss)
+                # print([(n, p.grad is not None) for n, p in self.named_parameters()])
+                # print([n for n, p in self.named_parameters() if p.grad ==None])
+
+                if (batch_idx + 1) % self.hparams.grad_steps == 0 or self.trainer.is_last_batch:
+                    # nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+                    target_optimizer.step()
+                    target_opt_scheduler.step()
+                  
+                    target_optimizer.zero_grad()
+
+            self.log("train_loss", loss, prog_bar=True)
         return loss
 
     def on_validation_start(self) -> None:
@@ -362,7 +381,7 @@ class LitModule(pl.LightningModule):
         if self.model_postprocess_fn:
             output = self.model_postprocess_fn(output)
         # By default, on_step=False and on_epoch=True
-        self.log("val_loss", loss)
+        self.log("val_loss", loss, prog_bar=True)
         self._compute_metric_score(
             metric=self.validation_metric,
             custom_metric_func=self.custom_metric_func,
@@ -458,11 +477,18 @@ class LitModule(pl.LightningModule):
             if isinstance(self.trainer.strategy, DeepSpeedStrategy):
                 max_steps = 1
             else:
-                max_steps = (
-                    len(self.trainer.datamodule.train_dataloader())
-                    * self.trainer.max_epochs
-                    // self.trainer.accumulate_grad_batches
-                )
+                if self.automatic_optimization:
+                    max_steps = (
+                        len(self.trainer.datamodule.train_dataloader())
+                        * self.trainer.max_epochs
+                        // self.trainer.accumulate_grad_batches
+                    )
+                else:
+                    max_steps = (
+                        len(self.trainer.datamodule.train_dataloader())
+                        * self.trainer.max_epochs
+                        // self.hparams.grad_steps
+                    )
                 logger.debug(
                     f"len(trainer.datamodule.train_dataloader()): {len(self.trainer.datamodule.train_dataloader())}"
                 )
@@ -476,7 +502,7 @@ class LitModule(pl.LightningModule):
         warmup_steps = self.hparams.warmup_steps
         if isinstance(warmup_steps, float):
             warmup_steps = int(max_steps * warmup_steps)
-
+        print(f"warmup steps: {warmup_steps}")
         logger.debug(f"warmup steps: {warmup_steps}")
         logger.debug(f"lr_schedule: {self.hparams.lr_schedule}")
         scheduler = get_lr_scheduler(
@@ -516,4 +542,4 @@ class LitModule(pl.LightningModule):
     def on_before_optimizer_step(self, optimizer):
         # If using mixed precision, the gradients are already unscaled here
         if self.track_grad_norm != -1:
-            self.log_dict(grad_norm(self, norm_type=self.track_grad_norm))
+            self.log_dict(grad_norm(self, norm_type=self.track_grad_norm), prog_bar=True)
