@@ -257,7 +257,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     if i == j: continue
                     alignment_loss += KL_loss(multimodal_logits[i], multimodal_logits[j])
                     num += 1
-            alignment_loss = alignment_loss / num
+            # alignment_loss = alignment_loss / num # run1
+            alignment_loss = 0.1 * alignment_loss # run2
 
 
 
