@@ -148,8 +148,8 @@ class CLIPForImageText_fusionmlp(nn.Module):
         -------
             A dictionary with logits and features.
         """
-        has_image = self.image_key in batch
-        has_text = self.text_token_ids_key in batch
+        has_image = (self.image_key in batch and batch[self.image_key] != None)
+        has_text = (self.text_token_ids_key in batch and batch[self.text_token_ids_key] != None)
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
 
         if has_image:
@@ -231,7 +231,13 @@ class CLIPForImageText_fusionmlp(nn.Module):
         ret[LOGIT_SCALE] = self.model.logit_scale.exp()
 
         # return {self.prefix: ret}
-        return {self.prefix: ret, self.prefix_dict[0]: {FEATURES: ret[FEATURES+"_IMAGE"]}, self.prefix_dict[1]: {FEATURES: ret[FEATURES+"_TEXT"]}}
+        res = {self.prefix: ret}
+        if has_image:
+            res[self.prefix_dict[0]] = {FEATURES: ret[FEATURES+"_IMAGE"]}
+        if has_text:
+            res[self.prefix_dict[1]] = {FEATURES: ret[FEATURES+"_TEXT"]}
+        return res
+        # return {self.prefix: ret, self.prefix_dict[0]: {FEATURES: ret[FEATURES+"_IMAGE"]}, self.prefix_dict[1]: {FEATURES: ret[FEATURES+"_TEXT"]}}
 
     def get_layer_ids(
         self,
