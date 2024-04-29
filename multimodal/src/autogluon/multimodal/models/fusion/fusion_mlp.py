@@ -60,6 +60,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         loss_weight: Optional[float] = None,
         aug_config: Optional[DictConfig] = None,
         alignment_loss: Optional[str] = None,
+        column_types: Optional[list] = None,
     ):
         """
         Parameters
@@ -126,7 +127,18 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     has_clip = True
                     break
             if has_clip:
-                in_features = base_in_feat * (len(raw_in_features) + 1)
+                col_types = column_types.values()
+                has_image = False
+                has_text = False
+                for col_type in col_types:
+                    if 'image' in col_type:
+                        has_image = True
+                    if 'text' in col_type:
+                        has_text = True
+                if has_image and has_text:
+                    in_features = base_in_feat * (len(raw_in_features) + 1)
+                else:
+                    in_features = base_in_feat * (len(raw_in_features)) # image / text没了。
             else:
                 in_features = base_in_feat * len(raw_in_features)
         else:
@@ -220,6 +232,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             per_output = run_model(per_model, batch)
             if hasattr(per_model, "prefix_dict"): # for CLIP model only
                 for prefix in per_model.prefix_dict:
+                    if prefix not in per_output: continue
                     multimodal_features.append(
                     per_adapter(per_output[prefix][FEATURES].to(per_adapter.weight.dtype))
                     )
@@ -227,7 +240,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 multimodal_features.append(
                     per_adapter(per_output[per_model.prefix][FEATURES].to(per_adapter.weight.dtype))
                 )
-            multimodal_logits.append(per_output[per_model.prefix][LOGITS])
+            if LOGITS in per_output[per_model.prefix]:
+                multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)
         
         alignment_loss = None

@@ -466,6 +466,7 @@ def create_fusion_model(
     num_numerical_columns: Optional[int] = None,
     num_categories: Optional[List[int]] = None,
     pretrained: Optional[bool] = True,
+    column_types: Optional[list] = None,
 ):
     """
     Create models. It supports the auto models of huggingface text and timm image.
@@ -531,6 +532,8 @@ def create_fusion_model(
 
     if len(single_models) > 1 or isinstance(single_models[0], CLIPForImageText_fusionmlp) :
         # must have one fusion model if there are multiple independent models
+        if isinstance(single_models[0], CLIPForImageText_fusionmlp):
+            return fusion_model(models=single_models, column_types=column_types)
         return fusion_model(models=single_models)
     elif len(single_models) == 1:
         return single_models[0]

@@ -810,7 +810,8 @@ def run_model(model: nn.Module, batch: dict, trt_model: Optional[nn.Module] = No
             if batch[k].dtype == torch.int32:
                 batch[k] = batch[k].to(torch.int64)
     if (not isinstance(pure_model, DocumentTransformer)) and isinstance(pure_model, supported_models):
-        input_vec = [batch[k] for k in pure_model.input_keys]
+        input_vec = [batch[k] if k in batch else None for k in pure_model.input_keys]
+
         # for sequential fusion
         if 'pre_state' in batch.keys():
             input_vec.append(batch['pre_state'])
