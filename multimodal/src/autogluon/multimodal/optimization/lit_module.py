@@ -201,7 +201,7 @@ class LitModule(pl.LightningModule):
             weight = per_output[WEIGHT] if WEIGHT in per_output else 1
             if (
                     _.startswith("fusion")
-                    and self.model.training
+                    and self.model.training and hasattr(self.model, "aug_config") 
                     and self.model.aug_config.turn_on
                 ):
 
