@@ -216,7 +216,7 @@ class TextProcessor:
             # [CLS] [Field1 Tokens] [SEP] [Field2 Tokens] [SEP] [Field3 Tokens] [EOS]
             max_length += 1
 
-        if self.use_miss_token_embed:
+        if hasattr(self, "use_miss_token_embed") and self.use_miss_token_embed:
             for k, v in text_tokens.items():
                 if len(v) == 0:
                     text_tokens[k] = np.array([-1])
