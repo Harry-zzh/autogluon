@@ -1837,6 +1837,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
         metrics: Optional[Union[str, List[str]]] = None,
         return_pred: Optional[bool] = False,
         realtime: Optional[bool] = False,
+        use_ensemble: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -1905,6 +1906,12 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             )
             per_metric_name = per_metric if isinstance(per_metric, str) else per_metric.name
             results[per_metric_name] = score
+
+        if use_ensemble:
+            if self._problem_type in [BINARY, MULTICLASS]:
+                return results, logits, y_true 
+            else:
+                return results, y_pred, y_true 
 
         if return_pred:
             return results, self._as_pandas(data=data, to_be_converted=y_pred_inv)

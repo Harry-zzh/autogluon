@@ -540,6 +540,7 @@ class MultiModalPredictor:
         return_pred: Optional[bool] = False,
         realtime: Optional[bool] = False,
         eval_tool: Optional[str] = None,
+        use_ensemble: Optional[bool] = False,
     ):
         """
         Evaluate the model on a given dataset.
@@ -595,6 +596,7 @@ class MultiModalPredictor:
             similarity_type=similarity_type,
             cutoffs=cutoffs,
             label=label,
+            use_ensemble=use_ensemble
         )
 
     def predict(
@@ -605,6 +607,7 @@ class MultiModalPredictor:
         as_pandas: Optional[bool] = None,
         realtime: Optional[bool] = False,
         save_results: Optional[bool] = None,
+        use_ensemble: Optional[bool] = False,
     ):
         """
         Predict the label column values for new data.
@@ -639,6 +642,7 @@ class MultiModalPredictor:
             realtime=realtime,
             save_results=save_results,
             id_mappings=id_mappings,
+            use_ensemble=use_ensemble
         )
 
     def predict_proba(

@@ -11,6 +11,27 @@ import pandas as pd
 from ...constants import PROBLEM_TYPES
 from ...metrics import log_loss
 from ...utils import compute_weighted_metric, get_pred_from_proba
+from scipy.special import expit, softmax
+
+def logits_to_prob(logits: np.ndarray):
+    """
+    Convert logits to probabilities.
+
+    Parameters
+    ----------
+    logits
+        The logits output of a classification head.
+
+    Returns
+    -------
+    Probabilities.
+    """
+    if logits.ndim == 1:
+        return expit(logits)
+    elif logits.ndim == 2:
+        return softmax(logits, axis=1)
+    else:
+        raise ValueError(f"Unsupported logit dim: {logits.ndim}.")
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +39,10 @@ logger = logging.getLogger(__name__)
 class AbstractWeightedEnsemble:
     def predict(self, X):
         y_pred_proba = self.predict_proba(X)
-        return get_pred_from_proba(y_pred_proba=y_pred_proba, problem_type=self.problem_type)
+        if self.metric.name == "roc_auc":
+            return y_pred_proba, y_pred_proba
+
+        return get_pred_from_proba(y_pred_proba=y_pred_proba, problem_type=self.problem_type), y_pred_proba
 
     def predict_proba(self, X):
         return self.weight_pred_probas(X, weights=self.weights_)
@@ -126,10 +150,13 @@ class EnsembleSelection(AbstractWeightedEnsemble):
             fant_ensemble_prediction = np.zeros(weighted_ensemble_prediction.shape)
             for j, pred in enumerate(predictions):
                 fant_ensemble_prediction[:] = weighted_ensemble_prediction + (1.0 / float(s + 1)) * pred
-                if self.problem_type in ["multiclass", "softclass"]:
-                    # Renormalize
-                    fant_ensemble_prediction[:] = fant_ensemble_prediction / fant_ensemble_prediction.sum(axis=1)[:, np.newaxis]
-                scores[j] = self._calculate_regret(y_true=labels, y_pred_proba=fant_ensemble_prediction, metric=self.metric, sample_weight=sample_weight)
+                if self.problem_type in ["binary"]: 
+                    fant_ensemble_prediction_prob = logits_to_prob(fant_ensemble_prediction[:])[:, 1]
+                    scores[j] = self._calculate_regret(y_true=labels, y_pred_proba=fant_ensemble_prediction_prob, metric=self.metric, sample_weight=sample_weight)
+                
+                else:
+                    scores[j] = self._calculate_regret(y_true=labels, y_pred_proba=fant_ensemble_prediction, metric=self.metric, sample_weight=sample_weight)
+                
                 if round_scores:
                     scores[j] = scores[j].round(round_decimals)
 
@@ -203,11 +230,11 @@ class EnsembleSelection(AbstractWeightedEnsemble):
             self.indices_ = order
             self.trajectory_ = trajectory
             self.train_score_ = trajectory[-1]
-
+        print("current error: ", self.train_score_)
         logger.debug("Ensemble indices: " + str(self.indices_))
 
-    def _calculate_regret(self, y_true: np.ndarray, y_pred_proba: np.ndarray, metric, sample_weight=None):
-        if metric.needs_pred or metric.needs_quantile:
+    def _calculate_regret(self, y_true, y_pred_proba, metric, sample_weight=None):
+        if metric.needs_pred or metric.needs_quantile: # metric.needs_pred True
             preds = get_pred_from_proba(y_pred_proba=y_pred_proba, problem_type=self.problem_type)
         else:
             preds = y_pred_proba
