@@ -257,11 +257,21 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     if i == j: continue
                     alignment_loss += KL_loss(multimodal_logits[i], multimodal_logits[j])
                     num += 1
-            # alignment_loss = alignment_loss / num # run1
-            alignment_loss = 0.1 * alignment_loss # run2
+            alignment_loss = alignment_loss / num # run1
+            # alignment_loss = 0.1 * alignment_loss # run2
+        elif self.alignment_loss == "KL_feature":
+            alignment_loss = 0.
+            num = 0
+            for i in range(len(multimodal_features)):
+                for j in range(len(multimodal_features)):
+                    if i == j: continue
+                    alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
+                    num += 1
+            alignment_loss = alignment_loss / num # run1
 
 
 
+        ori_multimodal_features = multimodal_features
         multimodal_features = torch.cat(multimodal_features, dim=1)
 
         # pass through augmentation network after adapter
