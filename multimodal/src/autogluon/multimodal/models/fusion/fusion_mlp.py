@@ -131,18 +131,21 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     has_clip = True
                     break
             if has_clip:
-                col_types = column_types.values()
-                has_image = False
-                has_text = False
-                for col_type in col_types:
-                    if 'image' in col_type:
-                        has_image = True
-                    if 'text' in col_type:
-                        has_text = True
-                if has_image and has_text:
-                    in_features = base_in_feat * (len(raw_in_features) + 1)
+                if column_types != None:
+                    col_types = column_types.values()
+                    has_image = False
+                    has_text = False
+                    for col_type in col_types:
+                        if 'image' in col_type:
+                            has_image = True
+                        if 'text' in col_type:
+                            has_text = True
+                    if has_image and has_text:
+                        in_features = base_in_feat * (len(raw_in_features) + 1)
+                    else:
+                        in_features = base_in_feat * (len(raw_in_features)) # image / text没了。
                 else:
-                    in_features = base_in_feat * (len(raw_in_features)) # image / text没了。
+                    in_features = base_in_feat * (len(raw_in_features) + 1)
             else:
                 in_features = base_in_feat * len(raw_in_features)
         else:
