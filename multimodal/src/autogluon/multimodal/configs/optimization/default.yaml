@@ -53,3 +53,5 @@ optimization:
   aug_learning_rate: 1.0e-4
   aug_optim_type: "adam"
   aug_weight_decay: 1.0e-5
+  contrastive_loss: ""
+  contrastive_loss_w: 0.1

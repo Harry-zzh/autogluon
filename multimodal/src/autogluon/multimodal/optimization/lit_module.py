@@ -11,14 +11,41 @@ from torch import nn
 from torch.nn.modules.loss import _Loss
 from torchmetrics.aggregation import BaseAggregator
 
-from ..constants import LM_TARGET, LOGITS, T_FEW, TEMPLATE_LOGITS, WEIGHT
+from ..constants import LM_TARGET, LOGITS, T_FEW, TEMPLATE_LOGITS, WEIGHT, FEATURES
 from ..data.mixup import MixupModule, multimodel_mixup
 from ..models.utils import run_model
 from .semantic_seg_metrics import COD, Balanced_Error_Rate
 from .utils import apply_layerwise_lr_decay, apply_single_lr, apply_two_stages_lr, get_lr_scheduler, get_optimizer, get_augment_network_parameters
-
+import copy 
 logger = logging.getLogger(__name__)
 
+def get_ground_truth(device, num_logits) -> torch.Tensor:
+    labels = torch.arange(num_logits, device=device, dtype=torch.long)
+    return labels
+
+def get_logits(features_1, features_2, logit_scale=1.):
+    logits_per_feature_1 = logit_scale * features_1 @ features_2.T
+    logits_per_feature_2 = logit_scale * features_2 @ features_1.T
+
+    return logits_per_feature_1, logits_per_feature_2
+    
+def contrastive_loss(features, logit_scale=1.):
+    total_loss = 0.
+    num = 0
+    # idx = 0
+    key_list = list(features.keys())
+    for idx_1 in range(0, len(features)):
+        for idx_2 in range(idx_1 + 1, len(features)):
+            key_1 = key_list[idx_1]
+            key_2 = key_list[idx_2]
+            logits_1, logits_2 = get_logits(features[key_1], features[key_2], logit_scale)
+            labels = get_ground_truth(logits_1.device, logits_1.shape[0])
+
+            total_loss += (F.cross_entropy(logits_1, labels) + F.cross_entropy(logits_2, labels))
+            num += 2
+    total_loss /= num
+
+    return total_loss
 
 class LitModule(pl.LightningModule):
     """
@@ -57,6 +84,8 @@ class LitModule(pl.LightningModule):
         aug_optim_type: Optional[str] = None,
         aug_weight_decay: Optional[float] = None,
         grad_steps: Optional[int] = 1,
+        contra_loss: Optional[str] = "",
+        contra_loss_w: Optional[float] = None
     ):
         """
         Parameters
@@ -155,7 +184,20 @@ class LitModule(pl.LightningModule):
             self.automatic_optimization = False
         # self.hparams.grad_steps = 1
         # self.automatic_optimization = False
+
+        self.contra_loss = contra_loss
+        if  self.contra_loss != "" and self.hparams.grad_steps > 1:
+            self.automatic_optimization = False
+            self.accum_batch, self.accum_features = [], {}
+            self.contrastive_loss_w = contra_loss_w
+            # self.loss_list = [] 
+            self.temp_model = copy.deepcopy(self.model)
+            for v in self.temp_model.parameters():
+                v.requires_grad = False
+
+
         print("self.automatic_optimization: ", self.automatic_optimization)
+        
 
     def _compute_template_loss(
         self,
@@ -271,7 +313,16 @@ class LitModule(pl.LightningModule):
     def _shared_step(
         self,
         batch: Dict,
+        use_temp: bool=False # when use contrastive loss and use temp_model
     ):
+        if self.contra_loss != "" and use_temp:
+            label = batch[self.temp_model.label_key]
+            if self.mixup_fn is not None:
+                self.mixup_fn.mixup_enabled = self.training & (self.current_epoch < self.hparams.mixup_off_epoch)
+                batch, label = multimodel_mixup(batch=batch, model=self.temp_model, mixup_fn=self.mixup_fn)
+            output = run_model(self.temp_model, batch)
+            loss = self._compute_loss(output=output, label=label)
+            return output, loss
         label = batch[self.model.label_key]
         if self.mixup_fn is not None:
             self.mixup_fn.mixup_enabled = self.training & (self.current_epoch < self.hparams.mixup_off_epoch)
@@ -309,7 +360,7 @@ class LitModule(pl.LightningModule):
             output, loss = self._shared_step(batch)
             loss = loss / self.hparams.grad_steps
             self.manual_backward(loss)
-
+            
             # gradient accumulation
             if (
                 batch_idx + 1
@@ -324,6 +375,71 @@ class LitModule(pl.LightningModule):
                 target_optimizer.zero_grad()
                 if self.hparams.aug_turn_on:
                     aug_optimizer.zero_grad()
+
+                    
+        elif self.contra_loss != "" and self.hparams.grad_steps > 1:
+            optimizer = self.optimizers()
+            scheduler = self.lr_schedulers()
+
+            # First, cache the features without any gradient tracking.
+            # 大概知道了 training step forward twice，第二次算出来的gradient大部分是None。deepcopy一个model
+            # self.model.eval()
+            with torch.no_grad():
+                output, loss = self._shared_step(batch, use_temp=True)
+                # self.loss_list.append(loss)
+
+            for key, per_output in output.items():
+                if key.startswith("fusion"): continue
+                if key in self.accum_features:
+                    if self.contra_loss == "contra_logit":
+                        self.accum_features[key].append(per_output[LOGITS])
+                    elif self.contra_loss == "contra_fea":
+                        self.accum_features[key].append(per_output[FEATURES])
+                else:
+                    if self.contra_loss == "contra_logit":
+                        self.accum_features[key] = [per_output[LOGITS]]
+                    elif self.contra_loss == "contra_fea":
+                        self.accum_features[key] = [per_output[FEATURES]]
+
+            self.accum_batch.append(batch)
+            if not ((batch_idx + 1) % self.hparams.grad_steps == 0):
+                # FIXME this makes data time logging unreliable when accumulating
+                return
+             
+            # Now, ready to take gradients for the last accum_freq batches.
+            # Re-do the forward pass for those batches, and use the cached features from the other batches as negatives.
+            # Call backwards each time, but only step optimizer at the end.
+            # self.model.train()
+            for j in range(self.hparams.grad_steps):
+                output, loss = self._shared_step(self.accum_batch[j])
+
+                inputs = {}
+                for key, val in self.accum_features.items():
+                    accumulated = self.accum_features[key]
+                    if self.contra_loss == "contra_logit":
+                        inputs[key] = torch.cat(accumulated[:j] + [output[key][LOGITS]] + accumulated[j + 1:])
+                    elif self.contra_loss == "contra_fea":
+                        inputs[key] = torch.cat(accumulated[:j] + [output[key][FEATURES]] + accumulated[j + 1:])
+
+                contra_loss = self.contrastive_loss_w * contrastive_loss(inputs)
+                self.log("contrastive_loss", contra_loss, prog_bar=True)
+                self.log("target_loss", loss, prog_bar=True)
+                losses = loss + contra_loss
+                total_loss = losses  / self.hparams.grad_steps
+                self.manual_backward(total_loss)
+
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+            self.temp_model = copy.deepcopy(self.model)
+            for v in self.temp_model.parameters():
+                v.requires_grad = False
+
+            self.accum_features = {}
+            self.accum_batch = []
+    
+    
         else:
             output, loss = self._shared_step(batch)
             if not self.automatic_optimization:
