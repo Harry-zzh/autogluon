@@ -64,6 +64,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         aug_config: Optional[DictConfig] = None,
         alignment_loss: Optional[str] = None,
         column_types: Optional[list] = None,
+        use_contrastive_loss: Optional[bool] = False,
     ):
         """
         Parameters
@@ -189,6 +190,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
         self.alignment_loss = alignment_loss
+        self.use_contrastive_loss = use_contrastive_loss
 
     def construct_augnet(self):
         model_feature_dict = [
@@ -270,7 +272,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     if i == j: continue
                     alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
                     num += 1
-            alignment_loss = alignment_loss / num # run1
+            # alignment_loss = alignment_loss / num # run1
+            alignment_loss = 0.1 * alignment_loss # run2
 
 
 
@@ -340,13 +343,14 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         logits = self.head(features)
 
         return_outputs = (features, logits, multimodal_logits, )
+        return_outputs += (ori_multimodal_features, )
 
         return_outputs += (aug_loss, )
         return_outputs += (alignment_loss, )
         
         return return_outputs
 
-    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor], aug_loss=None, alignment_loss=None):
+    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor], multimodal_features=None, aug_loss=None, alignment_loss=None):
         fusion_output = {
             self.prefix: {
                 LOGITS: logits,
@@ -357,6 +361,20 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             fusion_output["augmenter"] = aug_loss
         if alignment_loss != None:
             fusion_output["alignment_loss"] = alignment_loss
+
+        
+        if self.use_contrastive_loss:
+            output = {}
+            # for per_model, per_logits in zip(self.model, multimodal_logits):
+            for idx, per_model in enumerate(self.model):
+                per_logits = multimodal_logits[idx]
+                per_features = multimodal_features[idx]
+                per_output = {per_model.prefix: {}}
+                per_output[per_model.prefix][LOGITS] = per_logits
+                per_output[per_model.prefix][FEATURES] = per_features
+                output.update(per_output)
+            output.update(fusion_output)
+            return output
 
         if self.loss_weight is not None:
             output = {}
