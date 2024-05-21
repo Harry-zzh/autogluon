@@ -6,8 +6,11 @@ from torch import nn
 
 from ...constants import AUTOMM, FEATURES, LABEL, LOGITS, WEIGHT
 from ..custom_transformer import CLSToken, Custom_Transformer
-from ..utils import init_weights, run_model
+from ..utils import init_weights, run_model, create_adaptation
 from .base import AbstractMultimodalFusionModel
+from transformers import LlamaForSequenceClassification
+
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,8 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         loss_weight: Optional[float] = None,
         additive_attention: Optional[bool] = False,
         share_qv_weights: Optional[bool] = False,
+        use_llama: Optional[bool] = False,
+        use_contrastive_loss:  Optional[bool] = False,
     ):
         """
         Parameters
@@ -119,10 +124,13 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         raw_in_features = [per_model.out_features for per_model in models]
 
-        if adapt_in_features == "min":
+        if use_llama:
+            base_in_feat = 4096
+        elif adapt_in_features == "min":
             base_in_feat = min(raw_in_features)
         elif adapt_in_features == "max":
             base_in_feat = max(raw_in_features)
+        
         else:
             raise ValueError(f"unknown adapt_in_features: {adapt_in_features}")
 
@@ -131,40 +139,66 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         in_features = base_in_feat
 
         assert len(self.adapter) == len(self.model)
+        self.use_llama = use_llama
+        if use_llama:
 
-        self.fusion_transformer = Custom_Transformer(
-            d_token=in_features,
-            n_blocks=n_blocks,
-            attention_n_heads=attention_n_heads,
-            attention_dropout=attention_dropout,
-            attention_initialization=attention_initialization,
-            attention_normalization=attention_normalization,
-            ffn_d_hidden=ffn_d_hidden,
-            ffn_dropout=ffn_dropout,
-            ffn_activation=ffn_activation,
-            ffn_normalization=ffn_normalization,
-            residual_dropout=residual_dropout,
-            prenormalization=prenormalization,
-            first_prenormalization=first_prenormalization,
-            last_layer_query_idx=None,
-            n_tokens=None,
-            kv_compression_ratio=kv_compression_ratio,
-            kv_compression_sharing=kv_compression_sharing,
-            head_activation=head_activation,
-            head_normalization=head_normalization,
-            d_out=hidden_features,
-            projection=False,
-            additive_attention=additive_attention,
-            share_qv_weights=share_qv_weights,
-        )
+            self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
+            "meta-llama/Llama-2-7b-chat-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
+            filter = ["q", "k", "v"]
+            efficient_finetune = "lora"
+            lora_r = 3
+            lora_alpha = 32
+            for m_name, module in dict(self.fusion_transformer.named_modules()).items():
+                for c_name, layer in dict(module.named_children()).items():
+                    if not filter or any(re.match(filter_layer, c_name) for filter_layer in filter):
+                        assert isinstance(
+                            layer, nn.Linear
+                        ), f"LoRA can only be applied to torch.nn.Linear, but {layer} is {type(layer)}."
+                        adaptation_layer = create_adaptation(efficient_finetune, layer, lora_r, lora_alpha)
+                        adaptation_layer.weight = layer.weight
+                        adaptation_layer.bias = layer.bias
+                        setattr(module, c_name, adaptation_layer)
+            for k, v in self.fusion_transformer.named_parameters():
+                if "lora" not in k and "score" not in k:
+                    v.requires_grad = False
+                else:
+                    v.requires_grad = True
+                    print(k)
+            # in_features = 4096
+        else:
+            self.fusion_transformer = Custom_Transformer(
+                d_token=in_features,
+                n_blocks=n_blocks,
+                attention_n_heads=attention_n_heads,
+                attention_dropout=attention_dropout,
+                attention_initialization=attention_initialization,
+                attention_normalization=attention_normalization,
+                ffn_d_hidden=ffn_d_hidden,
+                ffn_dropout=ffn_dropout,
+                ffn_activation=ffn_activation,
+                ffn_normalization=ffn_normalization,
+                residual_dropout=residual_dropout,
+                prenormalization=prenormalization,
+                first_prenormalization=first_prenormalization,
+                last_layer_query_idx=None,
+                n_tokens=None,
+                kv_compression_ratio=kv_compression_ratio,
+                kv_compression_sharing=kv_compression_sharing,
+                head_activation=head_activation,
+                head_normalization=head_normalization,
+                d_out=hidden_features,
+                projection=False,
+                additive_attention=additive_attention,
+                share_qv_weights=share_qv_weights,
+            )
 
-        self.head = Custom_Transformer.Head(
-            d_in=in_features,
-            d_out=num_classes,
-            bias=True,
-            activation=head_activation,
-            normalization=head_normalization,
-        )
+            self.head = Custom_Transformer.Head(
+                d_in=in_features,
+                d_out=num_classes,
+                bias=True,
+                activation=head_activation,
+                normalization=head_normalization,
+            )
 
         self.cls_token = CLSToken(
             d_token=in_features,
@@ -175,8 +209,14 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         # init weights
         self.adapter.apply(init_weights)
-        self.head.apply(init_weights)
+        if not use_llama:
+            self.head.apply(init_weights)
         self.name_to_id = self.get_layer_ids()
+        if use_llama:
+            for k, v in self.name_to_id.items():
+                if "fusion_transformer" in k:
+                    if "lora" not in k and "score" not in k:
+                        self.name_to_id[k] = v + 1
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
     @property
@@ -204,9 +244,15 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         multimodal_features = torch.cat(multimodal_features, dim=1)
         multimodal_features = self.cls_token(multimodal_features)
-        features = self.fusion_transformer(multimodal_features)
-
-        logits = self.head(features)
+        # 记得image concat all
+        if not self.use_llama:
+            features = self.fusion_transformer(multimodal_features)
+            logits = self.head(features)
+        else:
+            outputs = self.fusion_transformer(input_ids=None,inputs_embeds=multimodal_features)
+            logits = outputs.logits
+            features = outputs.hidden_states
+            
         fusion_output = {
             self.prefix: {
                 LOGITS: logits,

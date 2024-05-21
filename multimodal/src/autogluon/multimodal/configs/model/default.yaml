@@ -298,6 +298,7 @@ model:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     early_fusion: False
+    use_llama: False
   ft_transformer:
     data_types:
       - "categorical"
