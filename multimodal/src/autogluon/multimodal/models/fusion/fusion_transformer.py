@@ -143,7 +143,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         if use_llama:
 
             self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
-            "meta-llama/Llama-2-7b-chat-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
+            "meta-llama/Llama-2-7b-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
             filter = ["q", "k", "v"]
             efficient_finetune = "lora"
             lora_r = 3
