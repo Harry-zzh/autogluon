@@ -921,7 +921,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             aug_optim_type=config.optimization.aug_optim_type,
             aug_weight_decay=config.optimization.aug_weight_decay,
             contra_loss=config.optimization.contrastive_loss,
-            contra_loss_w=config.optimization.contrastive_loss_w,
+            contra_loss_w=config.optimization.contrastive_loss_w if hasattr(config.optimization, "contrastive_loss_w") else 0.,
 
         )
 
