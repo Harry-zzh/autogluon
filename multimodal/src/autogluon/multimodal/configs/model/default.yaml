@@ -236,15 +236,15 @@ model:
     augmenter:
       turn_on: False
       arch: "mlp_vae"   #  trans_vae / mlp_vae
-      z_dim: 8
-      n_layer: 4
+      z_dim: 8 # mlp_vae
+      n_layer: 4 # mlp_vae
       n_head: 8
       tran_hidden: 2048
-      kl_loss_weight: 1. # 0.1
-      regularizer_loss_weight: 1. # 0.1
-      adv_weight: 1. # 0.0001
+      kl_loss_weight: 0.1
+      regularizer_loss_weight: 0.1
+      adv_weight: 0.0001
       consist_reg: True
-      consist_loss_weight: 1. # 0.01
+      consist_loss_weight: 0.01
       consist_t: 0.5
     use_miss_token_embed: False
     alignment_loss: None
