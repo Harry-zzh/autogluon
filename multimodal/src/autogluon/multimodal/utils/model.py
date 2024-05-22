@@ -424,6 +424,7 @@ def create_model(
             additive_attention=OmegaConf.select(model_config, "additive_attention", default=False),
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
             use_llama=model_config.use_llama if hasattr(model_config, "use_llama") else False,
+            use_llama_7B=model_config.use_llama_7B if hasattr(model_config, "use_llama_7B") else False,
         )
     elif model_name.lower().startswith(FT_TRANSFORMER):
         model = FT_Transformer(
