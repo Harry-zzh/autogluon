@@ -8,8 +8,8 @@ from ...constants import AUTOMM, FEATURES, LABEL, LOGITS, WEIGHT
 from ..custom_transformer import CLSToken, Custom_Transformer
 from ..utils import init_weights, run_model, create_adaptation
 from .base import AbstractMultimodalFusionModel
-from transformers import LlamaForSequenceClassification
-
+from transformers import LlamaForSequenceClassification, BitsAndBytesConfig
+from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 import re
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         additive_attention: Optional[bool] = False,
         share_qv_weights: Optional[bool] = False,
         use_llama: Optional[bool] = False,
+        use_llama_7B: Optional[bool] = False,
         use_contrastive_loss:  Optional[bool] = False,
     ):
         """
@@ -125,6 +126,8 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         raw_in_features = [per_model.out_features for per_model in models]
 
         if use_llama:
+            base_in_feat = 2048
+        elif use_llama_7B:
             base_in_feat = 4096
         elif adapt_in_features == "min":
             base_in_feat = min(raw_in_features)
@@ -140,10 +143,14 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         assert len(self.adapter) == len(self.model)
         self.use_llama = use_llama
+        self.use_llama_7B = use_llama_7B
         if use_llama:
 
+            # self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
+            # "meta-llama/Llama-2-7b-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
             self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
-            "meta-llama/Llama-2-7b-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
+            "TinyLlama/TinyLlama-1.1B-intermediate-step-1195k-token-2.5T", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
+            
             filter = ["q", "k", "v"]
             efficient_finetune = "lora"
             lora_r = 3
@@ -165,6 +172,31 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                     v.requires_grad = True
                     print(k)
             # in_features = 4096
+        elif use_llama_7B:
+            quantization_config=BitsAndBytesConfig(
+                load_in_4bit=True,
+                # bnb_4bit_compute_dtype=torch.bfloat16,
+                # bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_quant_type='nf4'
+            )
+            # quantization_config
+            self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
+            "meta-llama/Llama-2-7b-hf", num_labels=num_classes, quantization_config=quantization_config, cache_dir="/home/ubuntu/drive2", )#torch_dtype=torch.bfloat16) #torch_dtype=torch.float16    )
+            self.fusion_transformer = prepare_model_for_kbit_training(self.fusion_transformer)
+            lora_config = LoraConfig(
+                r=3,
+                target_modules=["q_proj", "k_proj", "v_proj"],
+                bias="none"
+            )
+            self.fusion_transformer = get_peft_model(self.fusion_transformer, peft_config=lora_config)
+          
+            for k, v in self.fusion_transformer.named_parameters():
+                if "score" in k:
+                    v.requires_grad = True
+                if v.requires_grad:
+                    print(k)
+            print()
         else:
             self.fusion_transformer = Custom_Transformer(
                 d_token=in_features,
@@ -209,10 +241,10 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         # init weights
         self.adapter.apply(init_weights)
-        if not use_llama:
+        if not use_llama and not use_llama_7B:
             self.head.apply(init_weights)
         self.name_to_id = self.get_layer_ids()
-        if use_llama:
+        if use_llama or use_llama_7B:
             for k, v in self.name_to_id.items():
                 if "fusion_transformer" in k:
                     if "lora" not in k and "score" not in k:
@@ -245,7 +277,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         multimodal_features = torch.cat(multimodal_features, dim=1)
         multimodal_features = self.cls_token(multimodal_features)
         # 记得image concat all
-        if not self.use_llama:
+        if not self.use_llama and not self.use_llama_7B:
             features = self.fusion_transformer(multimodal_features)
             logits = self.head(features)
         else:
