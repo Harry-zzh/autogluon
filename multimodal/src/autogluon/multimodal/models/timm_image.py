@@ -217,6 +217,19 @@ def forward_window_attn_seq_fusion(self, x, mask: Optional[torch.Tensor] = None,
     x = self.proj_drop(x)
     return x
 
+def forward_pool_mode_all(self, x):
+    x = self.forward_features(x)
+    x, x_fea = self.forward_head(x)
+    return x, x_fea
+
+def forward_pool_mode_all_head(self, x, pre_logits: bool = False):
+    ori_x = x
+    x = self.global_pool(x)
+    x = self.drop(x)
+    if pre_logits:
+        return self.flatten(x)
+    x = self.fc(x)
+    return self.flatten(x), ori_x
 
 class TimmAutoModelForImagePrediction(nn.Module):
     """
@@ -233,7 +246,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
         pretrained: Optional[bool] = True,
         early_fusion = False,
         sequential_fusion=False,
-        use_miss_token_embed=False
+        use_miss_token_embed=False,
+        pooling_mode=""
     ):
         """
         Load a pretrained image backbone from TIMM.
@@ -334,6 +348,14 @@ class TimmAutoModelForImagePrediction(nn.Module):
             self.model.miss_token_embed = nn.Embedding(1, 56*56*192)
         else:
             self.model.miss_token_embed = None
+        
+        if pooling_mode == "all":
+            pool_mode_forward = forward_pool_mode_all.__get__(self.model, self.model.__class__)
+            setattr(self.model, "forward", pool_mode_forward)
+
+            head_pool_mode_forward = forward_pool_mode_all_head.__get__(self.model.head, self.model.head.__class__)
+            setattr(self.model.head, "forward", head_pool_mode_forward)
+
         self.use_miss_token_embed = use_miss_token_embed
 
         self.early_fusion = early_fusion
@@ -345,7 +367,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 if "embed" not in n:
                     p.requires_grad = False
 
-        
+        self.pooling_mode = pooling_mode
     @property
     def image_key(self):
         return f"{self.prefix}_{IMAGE}"
@@ -432,7 +454,10 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 elif self.use_miss_token_embed:
                     features = self.model(images.reshape((b * n, c, h, w)), image_valid_num) 
                 else:
-                    features = self.model(images.reshape((b * n, c, h, w))) 
+                    if self.pooling_mode == "all":
+                        features, pool_features = self.model(images.reshape((b * n, c, h, w))) 
+                    else:
+                        features = self.model(images.reshape((b * n, c, h, w))) 
                 if self.num_classes > 0:
                     logits = self.head(features)
                 steps = torch.arange(0, n).type_as(image_valid_num)
@@ -467,6 +492,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
                         logits = logits.sum(dim=1) / torch.clamp(image_valid_num, min=1e-6)[:, None]  # (b, num_classes)
                 else:
                     logits = features
+                if self.pooling_mode == "all":
+                    features = pool_features.reshape(b,-1,pool_features.size()[-1])
 
         else:
             raise ValueError(f"unknown mix_choice: {self.mix_choice}")
