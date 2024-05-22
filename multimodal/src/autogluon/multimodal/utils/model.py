@@ -228,7 +228,8 @@ def create_model(
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
             sequential_fusion=model_config.sequential_fusion,
-            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False
+            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
+            pooling_mode=model_config.pooling_mode if hasattr(model_config, "pooling_mode") else "",
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
