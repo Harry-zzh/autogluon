@@ -903,8 +903,8 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             aug_lr=config.optimization.aug_learning_rate,
             aug_optim_type=config.optimization.aug_optim_type,
             aug_weight_decay=config.optimization.aug_weight_decay,
-            contra_loss=config.optimization.contrastive_loss,
-            contra_loss_w=config.optimization.contrastive_loss_w if hasattr(config.optimization, "contrastive_loss_w") else 0.,
+            contra_loss=config.optimization.contrastive_loss if hasattr(config.optimization, "contrastive_loss") else "",
+            contra_loss_w=config.optimization.contrastive_loss_w if hasattr(config.optimization, "contrastive_loss") else 0.,
 
         )
 
@@ -1119,7 +1119,7 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
             blacklist_msgs = ["already configured with model summary"]
             log_filter = LogFilter(blacklist_msgs)
             with apply_log_filter(log_filter):
-                if config.optimization.aug_optimizer or config.optimization.contrastive_loss != "":
+                if config.optimization.aug_optimizer or (config.optimization.contrastive_loss != "" if hasattr(config.optimization, "contrastive_loss") else False):
                     trainer = pl.Trainer(
                         accelerator="gpu" if num_gpus > 0 else OmegaConf.select(config, "env.accelerator", default="auto"),
                         devices=num_gpus if num_gpus > 0 else "auto",
