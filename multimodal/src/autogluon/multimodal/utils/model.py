@@ -454,7 +454,8 @@ def create_model(
             checkpoint_name=model_config.checkpoint_name,
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
-            sequential_fusion=model_config.sequential_fusion
+            sequential_fusion=model_config.sequential_fusion,
+            no_use_cate_miss_embed=model_config.no_use_cate_miss_embed if hasattr(model_config, "no_use_cate_miss_embed") else False
         )
     elif model_name.lower().startswith(SAM):
         model = SAMForSemanticSegmentation(
