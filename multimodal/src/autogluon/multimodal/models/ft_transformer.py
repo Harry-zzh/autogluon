@@ -27,6 +27,7 @@ class CategoricalFeatureTokenizer(nn.Module):
         d_token: int,
         bias: Optional[bool] = True,
         initialization: Optional[str] = "normal",
+        no_use_cate_miss_embed: Optional[bool] = False,
     ) -> None:
         """
         Parameters
@@ -62,6 +63,8 @@ class CategoricalFeatureTokenizer(nn.Module):
             if parameter is not None:
                 initialization_.apply(parameter, d_token)
 
+        self.no_use_cate_miss_embed = no_use_cate_miss_embed
+
     @property
     def n_tokens(self) -> int:
         """The number of tokens."""
@@ -73,10 +76,28 @@ class CategoricalFeatureTokenizer(nn.Module):
         return self.embeddings.embedding_dim
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.embeddings(x + self.category_offsets[None])
+        if self.no_use_cate_miss_embed:
+            result_x = None
+            for idx, x_ in enumerate(x[0]):
+                if x_ != self.num_categories[idx] - 1:
+                    x_embed = self.embeddings(x_.reshape(1,-1))
+                else:
+                    x_embed = torch.zeros(1, 1, self.d_token).to(x.device)
+                    x_embed.requires_grad = self.embeddings.weight.requires_grad
+                if result_x != None:
+                    result_x = torch.cat((result_x, x_embed), dim=1)
+                else:
+                    result_x = x_embed
+            x = result_x
 
-        if self.bias is not None:
-            x = x + self.bias[None]
+            if self.bias is not None:
+                x = x + self.bias[None]
+        
+        else:
+            x = self.embeddings(x + self.category_offsets[None])
+            
+            if self.bias is not None:
+                x = x + self.bias[None]
 
         return x
 
@@ -239,7 +260,7 @@ class NumericalFeatureTokenizer(nn.Module):
         self,
         x: Tensor,
     ) -> Tensor:
-        x = self.weight[None] * x[..., None]
+        x = self.weight[None] * x[..., None] # [bs, col_num, d_token] * [bs, col_num, 1] element-wise 
         if self.bias is not None:
             x = x + self.bias[None]
 
@@ -466,6 +487,7 @@ class FT_Transformer(nn.Module):
         pretrained: bool = False,
         early_fusion: bool = False,
         sequential_fusion: bool = False,
+        no_use_cate_miss_embed: bool = False,
     ) -> None:
         """
         Parameters
@@ -556,6 +578,7 @@ class FT_Transformer(nn.Module):
                 d_token=token_dim,
                 bias=token_bias,
                 initialization=token_initialization,
+                no_use_cate_miss_embed=no_use_cate_miss_embed
             )
             self.categorical_adapter = nn.Linear(token_dim, hidden_size)
 

@@ -353,6 +353,7 @@ model:
     early_fusion: False
     sequential_fusion: False
     use_miss_token_embed: False
+    no_use_cate_miss_embed: False
   sam:
     checkpoint_name: "facebook/sam-vit-huge"
     image_norm: "imagenet"
