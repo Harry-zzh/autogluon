@@ -36,6 +36,7 @@ class NumericalProcessor:
         self.prefix = model.prefix
         self.merge = merge
         self.requires_column_info = requires_column_info
+        self.use_miss_token_embed = model.use_miss_token_embed if hasattr(model, "use_miss_token_embed") else False
 
     @property
     def numerical_key(self):
@@ -61,6 +62,8 @@ class NumericalProcessor:
                 fn[f"{self.numerical_column_prefix}_{col_name}"] = StackCollator()
 
         fn[self.numerical_key] = StackCollator()
+        if self.use_miss_token_embed:
+            fn[f"{self.numerical_key}_miss_pos"] = StackCollator()
 
         return fn
 
@@ -88,7 +91,17 @@ class NumericalProcessor:
                 ret[f"{self.numerical_column_prefix}_{col_name}"] = i
 
         if self.merge == "concat":
+            numerical_features_missing_pos = {}
+            for key, value in numerical_features.items():
+                if "_miss_pos" in key:
+                    numerical_features_missing_pos[key] = value
+            if len(numerical_features_missing_pos):
+                ret[f"{self.numerical_key}_miss_pos"] = np.array(list(numerical_features_missing_pos.values()), dtype=np.int8)
+                for key in numerical_features_missing_pos.keys():
+                    del numerical_features[key]
+             
             ret[self.numerical_key] = np.array(list(numerical_features.values()), dtype=np.float32)
+            
         else:
             raise ValueError(f"Unknown merging type: {self.merge}")
 

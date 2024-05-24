@@ -10,7 +10,7 @@ from ..constants import CATEGORICAL, FEATURES, LABEL, LOGITS, NUMERICAL
 from .custom_transformer import CLSToken, Custom_Transformer, _TokenInitialization
 from .utils import init_weights
 from .utils import assign_layer_ids
-
+import copy
 logger = logging.getLogger(__name__)
 
 class CategoricalFeatureTokenizer(nn.Module):
@@ -217,6 +217,7 @@ class NumericalFeatureTokenizer(nn.Module):
         d_token: int,
         bias: Optional[bool] = True,
         initialization: Optional[str] = "normal",
+        use_miss_token_embed: Optional[bool] = False,
     ):
         """
         Parameters
@@ -245,6 +246,13 @@ class NumericalFeatureTokenizer(nn.Module):
         for parameter in [self.weight, self.bias]:
             if parameter is not None:
                 initialization_.apply(parameter, d_token)
+        self.use_miss_token_embed = use_miss_token_embed
+        if use_miss_token_embed:
+            self.miss_token_embed_weight = nn.Parameter(Tensor(in_features, d_token))
+            self.miss_token_embed_bias = nn.Parameter(Tensor(in_features, d_token)) if bias else None
+            for parameter in [self.miss_token_embed_weight, self.miss_token_embed_bias]:
+                if parameter is not None:
+                    initialization_.apply(parameter, d_token)
 
     @property
     def n_tokens(self) -> int:
@@ -259,8 +267,18 @@ class NumericalFeatureTokenizer(nn.Module):
     def forward(
         self,
         x: Tensor,
+        miss_pos= None
     ) -> Tensor:
+        if self.use_miss_token_embed:
+            mask_x = copy.deepcopy(x)
+            mask_x[miss_pos==0] = 0.
+            mask_x = self.miss_token_embed_weight[None] * mask_x[..., None]
+            if self.bias is not None:
+                mask_x = mask_x + self.miss_token_embed_bias[None]
+            x[miss_pos==1] = 0.
         x = self.weight[None] * x[..., None] # [bs, col_num, d_token] * [bs, col_num, 1] element-wise 
+        if self.use_miss_token_embed:
+            x = x + mask_x
         if self.bias is not None:
             x = x + self.bias[None]
 
@@ -319,6 +337,7 @@ class NumEmbeddings(nn.Module):
         embedding_arch: List[str],
         d_embedding: Optional[int] = None,
         memory_efficient: Optional[bool] = False,
+        use_miss_token_embed: Optional[bool] = False,
     ):
         """
         Parameters
@@ -381,7 +400,7 @@ class NumEmbeddings(nn.Module):
         if embedding_arch[0] == "linear":
             layers.append(
                 NumericalFeatureTokenizer(
-                    in_features=in_features, d_token=d_embedding, bias=True, initialization="normal"
+                    in_features=in_features, d_token=d_embedding, bias=True, initialization="normal",  use_miss_token_embed= use_miss_token_embed
                 )
             )
         elif embedding_arch[0] == "positional":
@@ -441,8 +460,12 @@ class NumEmbeddings(nn.Module):
         y = self.forward(torch.ones(1, self.in_features))
         return y.shape[-1]
 
-    def forward(self, x):
-        return self.layers(x)
+    def forward(self, x, miss_pos=None):
+        # return self.layers(x, miss_pos=miss_pos)
+        res = x
+        for layer in self.layers:
+            res = layer(res, miss_pos=miss_pos)
+        return res
 
 
 class FT_Transformer(nn.Module):
@@ -488,6 +511,7 @@ class FT_Transformer(nn.Module):
         early_fusion: bool = False,
         sequential_fusion: bool = False,
         no_use_cate_miss_embed: bool = False,
+        use_miss_token_embed: bool = False,
     ) -> None:
         """
         Parameters
@@ -569,6 +593,7 @@ class FT_Transformer(nn.Module):
         self.numerical_feature_tokenizer = None
         self.early_fusion = early_fusion
         self.sequential_fusion = sequential_fusion
+        self.use_miss_token_embed = use_miss_token_embed
 
 
         if num_categories:
@@ -587,6 +612,7 @@ class FT_Transformer(nn.Module):
                 in_features=num_numerical_columns,
                 d_embedding=token_dim,
                 embedding_arch=embedding_arch,
+                use_miss_token_embed= use_miss_token_embed
             )
             self.numerical_adapter = nn.Linear(token_dim, hidden_size)
 
@@ -668,6 +694,8 @@ class FT_Transformer(nn.Module):
             input_keys.append(self.categorical_key)
         if self.numerical_feature_tokenizer:
             input_keys.append(self.numerical_key)
+        if self.use_miss_token_embed:
+            input_keys.append(f"{self.numerical_key}_miss_pos")
         return input_keys
 
     @property
@@ -698,7 +726,10 @@ class FT_Transformer(nn.Module):
             categorical_features = self.categorical_adapter(categorical_features)
             multimodal_features.append(categorical_features)
         if self.numerical_feature_tokenizer:
-            numerical_features = self.numerical_feature_tokenizer(batch[self.numerical_key])
+            if self.use_miss_token_embed:
+                numerical_features = self.numerical_feature_tokenizer(batch[self.numerical_key], batch[f"{self.numerical_key}_miss_pos"])
+            else:
+                numerical_features = self.numerical_feature_tokenizer(batch[self.numerical_key])
             numerical_features = self.numerical_adapter(numerical_features)
             multimodal_features.append(numerical_features)
 

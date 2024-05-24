@@ -455,7 +455,8 @@ def create_model(
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
             sequential_fusion=model_config.sequential_fusion,
-            no_use_cate_miss_embed=model_config.no_use_cate_miss_embed if hasattr(model_config, "no_use_cate_miss_embed") else False
+            no_use_cate_miss_embed=model_config.no_use_cate_miss_embed if hasattr(model_config, "no_use_cate_miss_embed") else False,
+            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False
         )
     elif model_name.lower().startswith(SAM):
         model = SAMForSemanticSegmentation(
