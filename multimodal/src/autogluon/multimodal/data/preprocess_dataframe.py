@@ -144,6 +144,8 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
         self._document_feature_names = []
         self._semantic_segmentation_feature_names = []
 
+        self.use_numerical_miss_embed = config["numerical"]["use_miss_embed"] if "use_miss_embed" in config["numerical"] else False 
+
 
     @property
     def label_column(self):
@@ -684,6 +686,13 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
             col_value = pd.to_numeric(df[col_name]).to_numpy()
             processed_data = generator.transform(np.expand_dims(col_value, axis=-1))[:, 0]
             numerical_features[col_name] = processed_data.astype(np.float32)
+            if self.use_numerical_miss_embed:
+                # processed_data[np.where(np.isnan(col_value))] = np.nan
+                pos = np.zeros(len(col_value))
+                pos[np.isnan(col_value)] = 1
+                numerical_features[f"{col_name}_miss_pos"] = pos
+            
+
 
         return numerical_features, None
 
