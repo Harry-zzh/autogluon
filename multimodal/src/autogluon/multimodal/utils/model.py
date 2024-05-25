@@ -177,6 +177,8 @@ def create_model(
     num_numerical_columns: Optional[int] = None,
     num_categories: Optional[List[int]] = None,
     pretrained: Optional[bool] = True,
+    num_image_columns: Optional[int] = None,
+    num_text_columns: Optional[int] = None,
 ):
     """
     Create a single model.
@@ -209,7 +211,9 @@ def create_model(
             num_classes=num_classes,
             pretrained=pretrained,
             tokenizer_name=model_config.tokenizer_name,
-            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False
+            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
+            num_image_columns=num_image_columns,
+            num_text_columns=num_text_columns
         )
     elif model_name.lower().startswith(CLIP):
         model = CLIPForImageText(
@@ -481,6 +485,8 @@ def create_fusion_model(
     num_categories: Optional[List[int]] = None,
     pretrained: Optional[bool] = True,
     column_types: Optional[list] = None,
+    num_image_columns: Optional[int] = None,
+    num_text_columns: Optional[int] = None,
 ):
     """
     Create models. It supports the auto models of huggingface text and timm image.
@@ -527,6 +533,8 @@ def create_fusion_model(
             num_numerical_columns=num_numerical_columns,
             num_categories=num_categories,
             pretrained=pretrained,
+            num_image_columns=num_image_columns,
+            num_text_columns=num_text_columns
         )
 
         if isinstance(model, functools.partial):  # fusion model
