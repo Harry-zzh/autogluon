@@ -768,7 +768,9 @@ class BaseLearner(ExportMixin, DistillationMixin, RealtimeMixin):
                 num_classes=self._output_shape,
                 num_numerical_columns=len(df_preprocessor.numerical_feature_names),
                 num_categories=df_preprocessor.categorical_num_categories,
-                column_types=self._column_types
+                column_types=self._column_types,
+                num_image_columns=len(df_preprocessor.image_feature_names),
+                num_text_columns=len(df_preprocessor.text_feature_names)
             )
         return model
 

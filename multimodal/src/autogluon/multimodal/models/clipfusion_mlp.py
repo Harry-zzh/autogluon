@@ -42,7 +42,9 @@ class CLIPForImageText_fusionmlp(nn.Module):
         num_classes: Optional[int] = None,
         pretrained: Optional[bool] = True,
         tokenizer_name: Optional[str] = "clip",
-        use_miss_token_embed: bool = False
+        use_miss_token_embed: bool = False,
+        num_image_columns: Optional[int] = None,
+        num_text_columns: Optional[int] = None,
     ):
         """
         Load the pretrained CLIP from huggingface transformers.
@@ -89,6 +91,14 @@ class CLIPForImageText_fusionmlp(nn.Module):
         #     self.model.miss_token_embed = nn.Embedding(1, 512)
         # else:
         self.model.miss_token_embed = None
+        if num_text_columns == 0:
+            for k, v in self.model.named_parameters():
+                if "text_model" in k:
+                    v.requires_grad = False
+        if num_image_columns == 0:
+            for k, v in self.model.named_parameters():
+                if "vision_model" in k or "visual" in k:
+                    v.requires_grad = False
 
         # self.model.miss_token_embed = use_miss_token_embed
 
