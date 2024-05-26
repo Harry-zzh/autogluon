@@ -232,6 +232,8 @@ def create_model(
             sequential_fusion=model_config.sequential_fusion,
             use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
             pooling_mode=model_config.pooling_mode if hasattr(model_config, "pooling_mode") else "",
+            manifold_mixup=model_config.manifold_mixup if hasattr(model_config, "manifold_mixup") else False,
+            manifold_mixup_a=model_config.manifold_mixup_a if hasattr(model_config, "manifold_mixup_a") else None,
         )
     elif model_name.lower().startswith(HF_TEXT):
         model = HFAutoModelForTextPrediction(
@@ -246,7 +248,9 @@ def create_model(
             use_fast=OmegaConf.select(model_config, "use_fast", default=True),
             early_fusion=model_config.early_fusion,
             sequential_fusion=model_config.sequential_fusion,
-            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False
+            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
+            manifold_mixup=model_config.manifold_mixup if hasattr(model_config, "manifold_mixup") else False,
+            manifold_mixup_a=model_config.manifold_mixup_a if hasattr(model_config, "manifold_mixup_a") else None,
         )
     elif model_name.lower().startswith(T_FEW):
         model = TFewModel(
@@ -340,6 +344,8 @@ def create_model(
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
             aug_config=OmegaConf.select(model_config, "augmenter"),
             alignment_loss=OmegaConf.select(model_config, "alignment_loss"),
+            manifold_mixup=model_config.manifold_mixup if hasattr(model_config, "manifold_mixup") else False,
+
         )
     elif model_name.lower().startswith(FUSION_METATRANSFORMER):
         # model = functools.partial(
@@ -450,8 +456,10 @@ def create_model(
             pretrained=pretrained,
             early_fusion=model_config.early_fusion,
             sequential_fusion=model_config.sequential_fusion,
-            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False)
-        
+            use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
+            manifold_mixup=model_config.manifold_mixup if hasattr(model_config, "manifold_mixup") else False,
+            manifold_mixup_a=model_config.manifold_mixup_a if hasattr(model_config, "manifold_mixup_a") else None,
+        )
     elif model_name.lower().startswith(SAM):
         model = SAMForSemanticSegmentation(
             prefix=model_name,

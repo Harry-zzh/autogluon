@@ -62,6 +62,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         alignment_loss: Optional[str] = None,
         column_types: Optional[list] = None,
         use_contrastive_loss: Optional[bool] = False,
+        manifold_mixup: Optional[bool] = False,
     ):
         """
         Parameters
@@ -187,6 +188,10 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
 
         self.alignment_loss = alignment_loss
         self.use_contrastive_loss = use_contrastive_loss
+        self.manifold_mixup = manifold_mixup
+        if manifold_mixup:
+            self.manifold_mixup_indices = None
+            self.manifold_mixup_lam = None
 
     def construct_augnet(self):
         model_feature_dict = [
@@ -234,7 +239,16 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         for per_model, per_adapter in zip(self.model, self.adapter):
             per_model_args = args[offset : offset + len(per_model.input_keys)]
             batch = dict(zip(per_model.input_keys, per_model_args))
+            if self.manifold_mixup:
+                per_model.manifold_mixup_indices = self.manifold_mixup_indices
+                per_model.manifold_mixup_lam = self.manifold_mixup_lam
             per_output = run_model(per_model, batch)
+            if self.manifold_mixup and "manifold_mixup_indices" in per_output[per_model.prefix]:
+                self.manifold_mixup_indices = per_output[per_model.prefix]["manifold_mixup_indices"]
+                self.manifold_mixup_lam = per_output[per_model.prefix]["manifold_mixup_lam"]
+                per_model.manifold_mixup_indices = None
+                per_model.manifold_mixup_lam = None
+
             if hasattr(per_model, "prefix_dict"): # for CLIP model only
                 for prefix in per_model.prefix_dict:
                     if prefix not in per_output: continue
@@ -260,6 +274,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     num += 1
             alignment_loss = alignment_loss / num # run1
             # alignment_loss = 0.1 * alignment_loss # run2
+            # alignment_loss = 0.5 * alignment_loss # run3
         elif self.alignment_loss == "KL_feature":
             alignment_loss = 0.
             num = 0
@@ -269,8 +284,10 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
                     num += 1
             # alignment_loss = alignment_loss / num # run1
-            alignment_loss = 0.1 * alignment_loss # run2
+            # alignment_loss = 0.1 * alignment_loss # run2
 
+            alignment_loss = alignment_loss / num # run1
+            
 
 
         ori_multimodal_features = multimodal_features
@@ -335,6 +352,12 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 FEATURES: features,
             }
         }
+        if self.manifold_mixup and self.training:
+            fusion_output[self.prefix]["manifold_mixup_indices"] = self.manifold_mixup_indices
+            fusion_output[self.prefix]["manifold_mixup_lam"] = self.manifold_mixup_lam
+            self.manifold_mixup_indices = None
+            self.manifold_mixup_lam = None
+
         if aug_loss != None:
             fusion_output["augmenter"] = aug_loss
         if alignment_loss != None:
