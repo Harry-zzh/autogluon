@@ -271,9 +271,12 @@ class LitModule(pl.LightningModule):
                 if "manifold_mixup_lam" in per_output.keys():
                     indices = per_output["manifold_mixup_indices"]
                     lam = per_output["manifold_mixup_lam"]
-                    label_onehot = to_one_hot(label, num_classes)
-                    label_shuffled_onehot = label_onehot[indices]
-                    label = label_onehot * lam + label_shuffled_onehot * (1 - lam)
+                    if num_classes > 1:
+                        label_onehot = to_one_hot(label, num_classes)
+                        label_shuffled_onehot = label_onehot[indices]
+                        label = label_onehot * lam + label_shuffled_onehot * (1 - lam)
+                    else:
+                        label = label * lam + label[indices] * (1 - lam)
                 elif isinstance(self.loss_func, SoftTargetCrossEntropy):
                     label = to_one_hot(label, num_classes)
                     
