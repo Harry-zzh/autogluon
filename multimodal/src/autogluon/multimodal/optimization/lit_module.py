@@ -17,7 +17,14 @@ from ..models.utils import run_model
 from .semantic_seg_metrics import COD, Balanced_Error_Rate
 from .utils import apply_layerwise_lr_decay, apply_single_lr, apply_two_stages_lr, get_lr_scheduler, get_optimizer, get_augment_network_parameters
 import copy 
+from .losses import SoftTargetCrossEntropy
 logger = logging.getLogger(__name__)
+
+def to_one_hot(inp, num_classes):
+    y_onehot = torch.FloatTensor(inp.size(0), num_classes).to(inp.device)
+    y_onehot.zero_()
+    y_onehot.scatter_(1, inp.unsqueeze(1).data, 1)
+    return y_onehot
 
 def get_ground_truth(device, num_logits) -> torch.Tensor:
     labels = torch.arange(num_logits, device=device, dtype=torch.long)
@@ -245,6 +252,7 @@ class LitModule(pl.LightningModule):
         for _, per_output in output.items():
             if _ == "augmenter" or _ == "alignment_loss": continue
             weight = per_output[WEIGHT] if WEIGHT in per_output else 1
+
             if (
                     _.startswith("fusion")
                     and self.model.training and hasattr(self.model, "aug_config") 
@@ -263,6 +271,16 @@ class LitModule(pl.LightningModule):
             ):  # Do only add template loss if T-Few. #TODO Add compatibility to Fusion models.
                 loss += self._compute_template_loss(per_output, label) * weight
             else:
+                num_classes = per_output[LOGITS].size()[-1]
+                if "manifold_mixup_lam" in per_output.keys():
+                    indices = per_output["manifold_mixup_indices"]
+                    lam = per_output["manifold_mixup_lam"]
+                    label_onehot = to_one_hot(label, num_classes)
+                    label_shuffled_onehot = label_onehot[indices]
+                    label = label_onehot * lam + label_shuffled_onehot * (1 - lam)
+                elif isinstance(self.loss_func, SoftTargetCrossEntropy):
+                    label = to_one_hot(label, num_classes)
+                    
                 loss += (
                     self.loss_func(
                         input=per_output[LOGITS].squeeze(dim=1),
