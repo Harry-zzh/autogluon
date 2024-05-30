@@ -249,7 +249,7 @@ class NumericalFeatureTokenizer(nn.Module):
         x: Tensor,
         miss_pos= None
     ) -> Tensor:
-        if self.use_miss_token_embed:
+        if self.use_miss_token_embed and miss_pos != None and 1 in miss_pos.unique():
             mask_x = copy.deepcopy(x)
             mask_x[miss_pos==0] = 0.
             mask_x = self.miss_token_embed_weight[None] * mask_x[..., None]
@@ -257,7 +257,7 @@ class NumericalFeatureTokenizer(nn.Module):
                 mask_x = mask_x + self.miss_token_embed_bias[None]
             x[miss_pos==1] = 0.
         x = self.weight[None] * x[..., None] # [bs, col_num, d_token] * [bs, col_num, 1] element-wise 
-        if self.use_miss_token_embed:
+        if self.use_miss_token_embed and miss_pos != None and 1 in miss_pos.unique():
             x = x + mask_x
         if self.bias is not None:
             x = x + self.bias[None]
