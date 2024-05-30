@@ -62,7 +62,7 @@ class NumericalProcessor:
                 fn[f"{self.numerical_column_prefix}_{col_name}"] = StackCollator()
 
         fn[self.numerical_key] = StackCollator()
-        if self.use_miss_token_embed:
+        if hasattr(self, "use_miss_token_embed") and self.use_miss_token_embed:
             fn[f"{self.numerical_key}_miss_pos"] = StackCollator()
 
         return fn
