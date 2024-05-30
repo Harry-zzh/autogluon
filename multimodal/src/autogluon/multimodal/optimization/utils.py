@@ -128,7 +128,7 @@ def get_loss_func(
     A Pytorch loss module.
     """
     if problem_type in [BINARY, MULTICLASS]:
-        if mixup_active:
+        if mixup_active or (config.manifold_mixup if hasattr(config, "manifold_mixup") else False):
             loss_func = SoftTargetCrossEntropy()
         else:
             if loss_func_name is not None and loss_func_name.lower() == "focal_loss":

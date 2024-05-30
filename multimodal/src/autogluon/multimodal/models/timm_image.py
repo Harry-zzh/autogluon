@@ -7,17 +7,25 @@ import torch
 from timm import create_model
 from timm.layers.linear import Linear
 from torch import nn
-
+import numpy as np
 from ..constants import AUTOMM, COLUMN, COLUMN_FEATURES, FEATURES, IMAGE, IMAGE_VALID_NUM, LABEL, LOGITS, MASKS
 from .utils import assign_layer_ids, get_column_features, get_model_head
 from timm.models._manipulate import checkpoint_seq, named_apply
 from timm.models.swin_transformer import window_partition, window_reverse
 import math
+import re
 logger = logging.getLogger(__name__)
 
 
 # Stores the class names of the timm backbones that support variable input size. You can add more backbones to the list.
 SUPPORT_VARIABLE_INPUT_SIZE_TIMM_CLASSES = {"convnext", "efficientnet", "mobilenetv3", "regnet", "resnet"}
+
+
+def to_one_hot(inp, num_classes):
+    y_onehot = torch.FloatTensor(inp.size(0), num_classes).to(inp.device)
+    y_onehot.zero_()
+    y_onehot.scatter_(1, inp.unsqueeze(1).data, 1)
+    return y_onehot
 
 # miss token
 def forward_for_miss_token(self, x, image_valid_num):
@@ -247,7 +255,9 @@ class TimmAutoModelForImagePrediction(nn.Module):
         early_fusion = False,
         sequential_fusion=False,
         use_miss_token_embed=False,
-        pooling_mode=""
+        pooling_mode="",
+        manifold_mixup: bool = False,
+        manifold_mixup_a: float = 0.,
     ):
         """
         Load a pretrained image backbone from TIMM.
@@ -367,6 +377,24 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 if "embed" not in n:
                     p.requires_grad = False
 
+        # for manifold-mixup
+        self.manifold_mixup = manifold_mixup
+        if manifold_mixup:
+            self.manifold_mixup_a = manifold_mixup_a
+            self.manifold_mixup_indices = None
+            self.manifold_mixup_lam = None
+            self.module_list = []
+            for n, m in self.model.named_modules():
+                #if 'conv' in n:
+                pattern = r"layers\.\d"
+                match = re.search(pattern, n)
+                if match:
+                    result = match.group()
+                    if result == n:
+                        self.module_list.append(m)
+                else:
+                    continue
+
         self.pooling_mode = pooling_mode
     @property
     def image_key(self):
@@ -448,16 +476,43 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 b, h, w, c = features.shape
                 return features.reshape(b, -1, c), torch.tensor([])
             else:
-
-                if pre_state != None:
-                    features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
-                elif self.use_miss_token_embed:
-                    features = self.model(images.reshape((b * n, c, h, w)), image_valid_num) 
-                else:
-                    if self.pooling_mode == "all":
-                        features, pool_features = self.model(images.reshape((b * n, c, h, w))) 
+                if self.training and self.manifold_mixup:
+                    alpha = self.manifold_mixup_a
+                    
+                    if self.manifold_mixup_lam == None:
+                        if alpha <= 0:
+                            self.manifold_mixup_lam = 1
+                        else:
+                            self.manifold_mixup_lam = np.random.beta(alpha, alpha)
+                    # k = np.random.randint(-1, len(self.module_list))
+                    k = np.random.randint(0, len(self.module_list))
+                    
+                    if self.manifold_mixup_indices == None:
+                        self.manifold_mixup_indices = torch.randperm(images.size(0)).to(images.device)
+                    # target_onehot = to_one_hot(target, self.num_classes)
+                    # target_shuffled_onehot = target_onehot[self.manifold_mixup_indices]
+                    
+                    if k == -1: # input manifold?
+                        images = images * self.manifold_mixup_lam + images[self.manifold_mixup_indices] * (1 - self.manifold_mixup_lam)
+                        features = self.model(images.reshape((b * n, c, h, w)))
                     else:
-                        features = self.model(images.reshape((b * n, c, h, w))) 
+                        modifier_hook = self.module_list[k].register_forward_hook(self.hook_modify)
+                        features = self.model(images.reshape((b * n, c, h, w)))
+                        modifier_hook.remove()
+                    # target_reweighted = target_onehot* self.manifold_mixup_lam + target_shuffled_onehot * (1 - self.manifold_mixup_lam)
+                    # self.manifold_mixup_lam = None
+                    # self.manifold_mixup_indices = None
+
+                else:
+                    if pre_state != None:
+                        features, state = self.model(images.reshape((b * n, c, h, w)), state=pre_state)  # (b*n, num_features)
+                    elif self.use_miss_token_embed:
+                        features = self.model(images.reshape((b * n, c, h, w)), image_valid_num) 
+                    else:
+                        if self.pooling_mode == "all":
+                            features, pool_features = self.model(images.reshape((b * n, c, h, w))) 
+                        else:
+                            features = self.model(images.reshape((b * n, c, h, w))) 
                 if self.num_classes > 0:
                     logits = self.head(features)
                 steps = torch.arange(0, n).type_as(image_valid_num)
@@ -521,6 +576,9 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 }
             }
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
+        if self.manifold_mixup and self.training:
+            ret["manifold_mixup_lam"] = self.manifold_mixup_lam
+            ret["manifold_mixup_indices"] = self.manifold_mixup_indices
         if state != None:
             ret["state"] = state
 
@@ -611,3 +669,8 @@ class TimmAutoModelForImagePrediction(nn.Module):
         logger.info(f"Model {self.prefix} weights saved to {weights_path}.")
         config_path = f"{save_path}/config.json"
         self.dump_config(config_path)
+    
+
+    def hook_modify(self, module, input, output):
+        output = self.manifold_mixup_lam * output + (1 - self.manifold_mixup_lam) * output[self.manifold_mixup_indices]
+        return output

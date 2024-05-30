@@ -150,7 +150,7 @@ class MultimodalMetaTransformer(AbstractMultimodalFusionModel):
         # self.fusion_transformer.load_state_dict(ckpt,strict=True)
 
         # For large-scale encoder:
-        ckpt = torch.load("/home/ubuntu/fetch/autogluon-bench/Meta-Transformer_large_patch14_encoder.pth")
+        ckpt = torch.load("/home/ubuntu/autogluon-bench/Meta-Transformer_large_patch14_encoder.pth")
         self.fusion_transformer = nn.Sequential(*[
                     Block(
                         dim=1024,

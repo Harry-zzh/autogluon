@@ -5,7 +5,8 @@ import torch
 from torch import nn
 from transformers import logging as hf_logging
 from transformers.models.t5 import T5PreTrainedModel
-
+import re
+import numpy as np
 from ..constants import (
     AUTOMM,
     COLUMN,
@@ -232,6 +233,8 @@ class HFAutoModelForTextPrediction(nn.Module):
         early_fusion: bool = False,
         sequential_fusion: bool = False,
         use_miss_token_embed: bool = False,
+        manifold_mixup: bool = False,
+        manifold_mixup_a: float = 0.,
     ):
         """
         Load a pretrained huggingface text transformer backbone.
@@ -331,6 +334,25 @@ class HFAutoModelForTextPrediction(nn.Module):
         else:
             self.disable_seg_ids = False
 
+        # for manifold-mixup
+        self.manifold_mixup = manifold_mixup
+        
+        if manifold_mixup:
+            self.manifold_mixup_a = manifold_mixup_a
+            self.manifold_mixup_indices = None
+            self.manifold_mixup_lam = None
+            self.module_list = []
+            for n, m in self.model.named_modules():
+                #if 'conv' in n:
+                pattern = r"encoder\.layer\.\d+"
+                match = re.search(pattern, n)
+                if match:
+                    result = match.group()
+                    if result == n:
+                        self.module_list.append(m)
+                else:
+                    continue
+        
         if early_fusion:
             for n, p in self.model.named_parameters():
                 if "embed" not in n:
@@ -416,7 +438,35 @@ class HFAutoModelForTextPrediction(nn.Module):
                     attention_mask=text_masks,
                 )
             else:
-                if "token_type_ids" in self.tokenizer.model_input_names:
+                if self.training and self.manifold_mixup:
+                    alpha = self.manifold_mixup_a
+                    if self.manifold_mixup_lam == None:
+                        if alpha <= 0:
+                            self.manifold_mixup_lam = 1
+                        else:
+                            self.manifold_mixup_lam = np.random.beta(alpha, alpha)
+                    # k = np.random.randint(-1, len(self.module_list))
+                    k = np.random.randint(0, len(self.module_list))
+                    
+                    if self.manifold_mixup_indices == None:
+                        self.manifold_mixup_indices = torch.randperm(text_token_ids.size(0)).to(text_token_ids.device)
+                    # target_onehot = to_one_hot(target, self.num_classes)
+                    # target_shuffled_onehot = target_onehot[self.manifold_mixup_indices]
+                    
+                    # if k == -1: # input manifold?
+                    #     outputs = self.model(
+                    #         input_ids=text_token_ids,
+                    #         attention_mask=text_masks,
+                    #     )
+                    # else:
+                    modifier_hook = self.module_list[k].register_forward_hook(self.hook_modify)
+                    outputs = self.model(
+                            input_ids=text_token_ids,
+                            token_type_ids=text_segment_ids,
+                            attention_mask=text_masks,
+                    )
+                    modifier_hook.remove()
+                elif "token_type_ids" in self.tokenizer.model_input_names:
                     if pre_state == None:
                         outputs = self.model(
                             input_ids=text_token_ids,
@@ -539,7 +589,11 @@ class HFAutoModelForTextPrediction(nn.Module):
                     FEATURES: pooled_features,
                 }
             }
+
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
+        if self.manifold_mixup and self.training:
+            ret["manifold_mixup_lam"] = self.manifold_mixup_lam
+            ret["manifold_mixup_indices"] = self.manifold_mixup_indices
         if column_features != None:
             ret[COLUMN_FEATURES][FEATURES].update(column_features)
             ret[COLUMN_FEATURES][MASKS].update(column_feature_masks)
@@ -594,3 +648,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         self.model.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
         logger.info(f"Model weights and tokenizer for {self.prefix} are saved to {save_path}.")
+
+    def hook_modify(self, module, input, output):
+        output = self.manifold_mixup_lam * output + (1 - self.manifold_mixup_lam) * output[self.manifold_mixup_indices]
+        return output
