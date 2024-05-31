@@ -45,6 +45,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         dropout_prob: Optional[float] = 0.5,
         normalization: Optional[str] = "layer_norm",
         loss_weight: Optional[float] = None,
+        use_contrastive_loss: Optional[bool] = False
     ):
         """
         Parameters
