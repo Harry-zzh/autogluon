@@ -46,6 +46,7 @@ class MultimodalMetaTransformer(AbstractMultimodalFusionModel):
         loss_weight: Optional[float] = None,
         additive_attention: Optional[bool] = False,
         share_qv_weights: Optional[bool] = False,
+        use_contrastive_loss=False
     ):
         """
         Parameters
