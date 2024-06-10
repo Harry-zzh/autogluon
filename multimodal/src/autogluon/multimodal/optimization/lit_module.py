@@ -413,11 +413,11 @@ class LitModule(pl.LightningModule):
 
                 target_optimizer.step()
                 target_opt_scheduler.step()
-                if self.hparams.aug_turn_on:
+                if  "fusion" in self.model.__class__.__name__.lower() and self.hparams.aug_turn_on:
                     aug_optimizer.step()
 
                 target_optimizer.zero_grad()
-                if self.hparams.aug_turn_on:
+                if  "fusion" in self.model.__class__.__name__.lower() and self.hparams.aug_turn_on:
                     aug_optimizer.zero_grad()
 
                     

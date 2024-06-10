@@ -47,6 +47,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         normalization: Optional[str] = "layer_norm",
         loss_weight: Optional[float] = None,
         aug_config: Optional[DictConfig] = None,
+        use_contrastive_loss=False
     ):
         """
         Parameters
