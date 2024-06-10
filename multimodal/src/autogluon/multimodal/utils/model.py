@@ -563,7 +563,7 @@ def create_fusion_model(
     if len(single_models) > 1 or isinstance(single_models[0], CLIPForImageText_fusionmlp) :
         # must have one fusion model if there are multiple independent models
         if isinstance(single_models[0], CLIPForImageText_fusionmlp):
-            return fusion_model(models=single_models, column_types=column_types)
+            return fusion_model(models=single_models, column_types=column_types, convert_to_text=config.data.categorical.convert_to_text)
         return fusion_model(models=single_models, use_contrastive_loss=(config.optimization.contrastive_loss != "") if hasattr(config.optimization, "contrastive_loss") else False)
     elif len(single_models) == 1:
         return single_models[0]
