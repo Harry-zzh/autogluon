@@ -87,7 +87,6 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
 
             self.adapter = nn.ModuleList([nn.Linear(in_feat, base_in_feat) for in_feat in raw_in_features])
 
-            # 虽然clip只有一个model，但是是image 和 text的late fusion
             has_clip = False
             for model_name in models:
                 if isinstance(model_name, CLIPForImageText_fusionmlp):
