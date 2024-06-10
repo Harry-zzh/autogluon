@@ -215,6 +215,8 @@ model:
       # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       # - "insert_punc(0.05)"
     use_miss_token_embed: False
+    manifold_mixup: False
+    manifold_mixup_a: 2.
   fusion_mlp:
     weight: 0.1
     adapt_in_features: "max"
