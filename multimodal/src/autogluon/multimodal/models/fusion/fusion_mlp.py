@@ -150,10 +150,11 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     in_features = base_in_feat * (len(raw_in_features) + 1)
             else:
                 in_features = base_in_feat * len(raw_in_features)
+            self.has_clip = has_clip
         else:
             self.adapter = nn.ModuleList([nn.Identity() for _ in range(len(raw_in_features))])
             in_features = sum(raw_in_features)
-
+        ori_in_features = in_features
         assert len(self.adapter) == len(self.model)
 
         fusion_mlp = []
@@ -178,7 +179,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         self.augmenter = None
         self.aug_config = aug_config
         if aug_config != None and aug_config.turn_on:
-            self.adapter_out_dim = base_in_feat
+            # self.adapter_out_dim = base_in_feat
+            self.adapter_out_dim = ori_in_features
             self.augmenter = self.construct_augnet()
 
         # init weights
@@ -237,6 +239,8 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         features. Otherwise, it returns a list of dictionaries collecting all the models' output,
         including the fusion model's.
         """
+        if self.has_clip:
+            ori_multimodal_fea_logits = {}
         multimodal_features = []
         multimodal_logits = []
         offset = 0
@@ -259,12 +263,24 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     multimodal_features.append(
                     per_adapter(per_output[prefix][FEATURES].to(per_adapter.weight.dtype))
                     )
+                    if self.has_clip:
+                        if prefix not in ori_multimodal_fea_logits:
+                            ori_multimodal_fea_logits[prefix] = {}
+                        ori_multimodal_fea_logits[prefix][FEATURES] = multimodal_features[-1]
             else:
                 multimodal_features.append(
                     per_adapter(per_output[per_model.prefix][FEATURES].to(per_adapter.weight.dtype))
                 )
+                if self.has_clip:
+                    if per_model.prefix not in ori_multimodal_fea_logits:
+                        ori_multimodal_fea_logits[per_model.prefix] = {}
+                    ori_multimodal_fea_logits[per_model.prefix][FEATURES] = multimodal_features[-1]
             if LOGITS in per_output[per_model.prefix]:
                 multimodal_logits.append(per_output[per_model.prefix][LOGITS])
+                if self.has_clip:
+                    if per_model.prefix not in ori_multimodal_fea_logits:
+                        ori_multimodal_fea_logits[per_model.prefix] = {}
+                    ori_multimodal_fea_logits[per_model.prefix][LOGITS] = multimodal_logits[-1]
             offset += len(per_model.input_keys)
         
         alignment_loss = None
@@ -293,8 +309,10 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             alignment_loss = alignment_loss / num # run1
             
 
-
-        ori_multimodal_features = multimodal_features
+        if not self.has_clip:
+            ori_multimodal_features = multimodal_features
+        else:
+            ori_multimodal_features = ori_multimodal_fea_logits
         multimodal_features = torch.cat(multimodal_features, dim=1)
 
         # pass through augmentation network after adapter
@@ -330,9 +348,10 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 )
 
                 after_augment = new.clone()
-                after_augment.register_hook(
-                    lambda grad: -grad * (self.aug_config.adv_weight)
-                )
+                if after_augment.requires_grad:
+                    after_augment.register_hook(
+                        lambda grad: -grad * (self.aug_config.adv_weight)
+                    )
                 multimodal_features = torch.cat(
                     [multimodal_features, after_augment], dim=0
                 ) # 这里两维
@@ -367,7 +386,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         
         return return_outputs
 
-    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor], multimodal_features=None, aug_loss=None, alignment_loss=None):
+    def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits, multimodal_features=None, aug_loss=None, alignment_loss=None):
         fusion_output = {
             self.prefix: {
                 LOGITS: logits,
@@ -389,13 +408,22 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         if self.use_contrastive_loss:
             output = {}
             # for per_model, per_logits in zip(self.model, multimodal_logits):
-            for idx, per_model in enumerate(self.model):
-                per_logits = multimodal_logits[idx]
-                per_features = multimodal_features[idx]
-                per_output = {per_model.prefix: {}}
-                per_output[per_model.prefix][LOGITS] = per_logits
-                per_output[per_model.prefix][FEATURES] = per_features
-                output.update(per_output)
+            if self.has_clip:
+                for k, v in multimodal_features.items():
+                    per_output = {k: {}}
+                    if LOGITS in v:
+                        per_output[k][LOGITS] = v[LOGITS]
+                    if FEATURES in v:
+                        per_output[k][FEATURES] = v[FEATURES]
+                    output.update(per_output)
+            else:
+                for idx, per_model in enumerate(self.model):
+                    per_logits = multimodal_logits[idx]
+                    per_features = multimodal_features[idx]
+                    per_output = {per_model.prefix: {}}
+                    per_output[per_model.prefix][LOGITS] = per_logits
+                    per_output[per_model.prefix][FEATURES] = per_features
+                    output.update(per_output)
             output.update(fusion_output)
             return output
 

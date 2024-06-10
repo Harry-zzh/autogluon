@@ -3,7 +3,7 @@ from typing import Optional
 
 import torch
 from torch import nn
-
+import re
 from ..constants import (
     AUTOMM,
     COLUMN,
@@ -18,6 +18,7 @@ from ..constants import (
     TEXT_TOKEN_IDS,
     TEXT_VALID_LENGTH,
 )
+import numpy as np
 from .utils import (
     assign_layer_ids,
     get_column_features,
@@ -45,6 +46,8 @@ class CLIPForImageText_fusionmlp(nn.Module):
         use_miss_token_embed: bool = False,
         num_image_columns: Optional[int] = None,
         num_text_columns: Optional[int] = None,
+        manifold_mixup: bool = False,
+        manifold_mixup_a: float = 0.,
     ):
         """
         Load the pretrained CLIP from huggingface transformers.
@@ -99,7 +102,34 @@ class CLIPForImageText_fusionmlp(nn.Module):
             for k, v in self.model.named_parameters():
                 if "vision_model" in k or "visual" in k:
                     v.requires_grad = False
-
+        
+        # for manifold-mixup
+        self.manifold_mixup = manifold_mixup
+        self.text_module_list = []
+        self.visual_module_list = []
+        if manifold_mixup:
+            self.manifold_mixup_a = manifold_mixup_a
+            self.manifold_mixup_indices = None
+            self.manifold_mixup_lam = None
+            self.module_list = []
+            for n, m in self.model.named_modules():
+                #if 'conv' in n:
+                pattern_t = r"text_model.encoder.layers\.\d+"
+                match = re.search(pattern_t, n)
+                if match:
+                    result = match.group()
+                    if result == n:
+                        self.text_module_list.append(m)
+                else:
+                    pattern_v = r"vision_model.encoder.layers\.\d+"
+                    match = re.search(pattern_v, n)
+                    if match:
+                        result = match.group()
+                        if result == n:
+                            self.visual_module_list.append(m)
+                    else: 
+                        continue
+        print()
         # self.model.miss_token_embed = use_miss_token_embed
 
     @property
@@ -167,12 +197,32 @@ class CLIPForImageText_fusionmlp(nn.Module):
             image_valid_num = batch[self.image_valid_num_key]
             assert images.dim() == 5
             b, n, c, h, w = images.shape
-            vision_outputs = self.model.vision_model(
-                pixel_values=images.reshape((b * n, c, h, w)),
-                output_attentions=True,
-                output_hidden_states=True,
-                return_dict=True,
-            )
+            if self.training and self.manifold_mixup:
+                alpha = self.manifold_mixup_a
+                if self.manifold_mixup_lam == None:
+                    if alpha <= 0:
+                        self.manifold_mixup_lam = 1
+                    else:
+                        self.manifold_mixup_lam = np.random.beta(alpha, alpha)
+                # k = np.random.randint(-1, len(self.module_list))
+                k = np.random.randint(0, len(self.visual_module_list))
+                if self.manifold_mixup_indices == None:
+                    self.manifold_mixup_indices = torch.randperm(images.size(0)).to(images.device)
+                modifier_hook = self.visual_module_list[k].register_forward_hook(self.hook_modify)
+                vision_outputs = self.model.vision_model(
+                    pixel_values=images.reshape((b * n, c, h, w)),
+                    output_attentions=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                modifier_hook.remove()
+            else:
+                vision_outputs = self.model.vision_model(
+                    pixel_values=images.reshape((b * n, c, h, w)),
+                    output_attentions=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
             image_features = self.model.visual_projection(vision_outputs.pooler_output)
             steps = torch.arange(0, n).type_as(image_valid_num)
             image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(image_features)  # (b, n)
@@ -203,13 +253,34 @@ class CLIPForImageText_fusionmlp(nn.Module):
             text_masks = (steps.reshape((1, -1)) < text_valid_length.reshape((-1, 1))).type_as(text_token_ids)
             assert torch.equal(text_valid_length, text_masks.sum(dim=-1))
 
-            text_outputs = self.model.text_model(
-                input_ids=text_token_ids,
-                attention_mask=text_masks,
-                output_attentions=True,
-                output_hidden_states=True,
-                return_dict=True,
-            )
+            if self.training and self.manifold_mixup:
+                alpha = self.manifold_mixup_a
+                if self.manifold_mixup_lam == None:
+                    if alpha <= 0:
+                        self.manifold_mixup_lam = 1
+                    else:
+                        self.manifold_mixup_lam = np.random.beta(alpha, alpha)
+                # k = np.random.randint(-1, len(self.module_list))
+                k = np.random.randint(0, len(self.text_module_list))
+                if self.manifold_mixup_indices == None:
+                    self.manifold_mixup_indices = torch.randperm(text_token_ids.size(0)).to(text_token_ids.device)
+                modifier_hook = self.text_module_list[k].register_forward_hook(self.hook_modify)
+                text_outputs = self.model.text_model(
+                    input_ids=text_token_ids,
+                    attention_mask=text_masks,
+                    output_attentions=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                modifier_hook.remove()
+            else:
+                text_outputs = self.model.text_model(
+                    input_ids=text_token_ids,
+                    attention_mask=text_masks,
+                    output_attentions=True,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
             text_features = self.model.text_projection(text_outputs.pooler_output)  # (b, num_features)
 
             # normalized features
@@ -239,6 +310,10 @@ class CLIPForImageText_fusionmlp(nn.Module):
             ret[LOGITS] = logits
 
         ret[LOGIT_SCALE] = self.model.logit_scale.exp()
+
+        if self.manifold_mixup and self.training:
+            ret["manifold_mixup_lam"] = self.manifold_mixup_lam
+            ret["manifold_mixup_indices"] = self.manifold_mixup_indices
 
         # return {self.prefix: ret}
         res = {self.prefix: ret}
@@ -291,3 +366,7 @@ class CLIPForImageText_fusionmlp(nn.Module):
             name_to_id[n] = 0
 
         return name_to_id
+
+    def hook_modify(self, module, input, output):
+        new_output_0 = self.manifold_mixup_lam * output[0] + (1 - self.manifold_mixup_lam) * output[0][self.manifold_mixup_indices]
+        return (new_output_0, output[1])
