@@ -63,6 +63,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
         column_types: Optional[list] = None,
         use_contrastive_loss: Optional[bool] = False,
         manifold_mixup: Optional[bool] = False,
+        convert_to_text: Optional[bool] = False,
     ):
         """
         Parameters
@@ -133,12 +134,15 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     col_types = column_types.values()
                     has_image = False
                     has_text = False
+                    has_cate = False
                     for col_type in col_types:
                         if 'image' in col_type:
                             has_image = True
                         if 'text' in col_type:
                             has_text = True
-                    if has_image and has_text:
+                        if 'categorical' in col_type:
+                            has_cate = True
+                    if (has_image and has_text) or (has_image and has_cate and convert_to_text):
                         in_features = base_in_feat * (len(raw_in_features) + 1)
                     else:
                         in_features = base_in_feat * (len(raw_in_features)) # image only or text only
