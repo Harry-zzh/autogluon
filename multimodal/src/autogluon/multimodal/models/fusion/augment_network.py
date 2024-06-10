@@ -36,6 +36,8 @@ class VAETransformer(nn.Module):
 
         self.gating = nn.Identity()
         self.init_parameters()
+        # print("not init parameters.")
+
 
     def init_parameters(self):
         self.last_layer.weight.data.zero_()
@@ -105,6 +107,7 @@ class VAE(nn.Module):
         self.decoder = nn.Sequential(*decoder_layers)
 
         self.init_parameters()
+        # print("not init parameters.")
 
     def init_parameters(self):
         self.decoder[-1].fc.weight.data.zero_()
