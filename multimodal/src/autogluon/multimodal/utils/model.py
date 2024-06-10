@@ -427,6 +427,8 @@ def create_model(
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
             use_llama=model_config.use_llama if hasattr(model_config, "use_llama") else False,
             use_llama_7B=model_config.use_llama_7B if hasattr(model_config, "use_llama_7B") else False,
+            aug_config=model_config.augmenter if hasattr(model_config, "augmenter") else None,
+            alignment_loss=model_config.alignment_loss if hasattr(model_config, "alignment_loss") else None,
         )
     elif model_name.lower().startswith(FT_TRANSFORMER):
         model = FT_Transformer(
