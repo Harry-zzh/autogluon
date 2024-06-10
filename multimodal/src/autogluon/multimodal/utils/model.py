@@ -213,7 +213,9 @@ def create_model(
             tokenizer_name=model_config.tokenizer_name,
             use_miss_token_embed=model_config.use_miss_token_embed if hasattr(model_config, "use_miss_token_embed") else False,
             num_image_columns=num_image_columns,
-            num_text_columns=num_text_columns
+            num_text_columns=num_text_columns,
+            manifold_mixup=model_config.manifold_mixup if hasattr(model_config, "manifold_mixup") else False,
+            manifold_mixup_a=model_config.manifold_mixup_a if hasattr(model_config, "manifold_mixup_a") else None,
         )
     elif model_name.lower().startswith(CLIP):
         model = CLIPForImageText(
@@ -436,6 +438,8 @@ def create_model(
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
             use_llama=model_config.use_llama if hasattr(model_config, "use_llama") else False,
             use_llama_7B=model_config.use_llama_7B if hasattr(model_config, "use_llama_7B") else False,
+            aug_config=model_config.augmenter if hasattr(model_config, "augmenter") else None,
+            alignment_loss=model_config.alignment_loss if hasattr(model_config, "alignment_loss") else None,
         )
     elif model_name.lower().startswith(FT_TRANSFORMER):
         model = FT_Transformer(
@@ -563,7 +567,7 @@ def create_fusion_model(
     if len(single_models) > 1 or isinstance(single_models[0], CLIPForImageText_fusionmlp) :
         # must have one fusion model if there are multiple independent models
         if isinstance(single_models[0], CLIPForImageText_fusionmlp):
-            return fusion_model(models=single_models, column_types=column_types, convert_to_text=config.data.categorical.convert_to_text)
+            return fusion_model(models=single_models, column_types=column_types, convert_to_text=config.data.categorical.convert_to_text, use_contrastive_loss=(config.optimization.contrastive_loss != "") if hasattr(config.optimization, "contrastive_loss") else False)
         return fusion_model(models=single_models, use_contrastive_loss=(config.optimization.contrastive_loss != "") if hasattr(config.optimization, "contrastive_loss") else False)
     elif len(single_models) == 1:
         return single_models[0]

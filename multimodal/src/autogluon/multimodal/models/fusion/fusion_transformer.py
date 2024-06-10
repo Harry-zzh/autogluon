@@ -11,8 +11,39 @@ from .base import AbstractMultimodalFusionModel
 from transformers import LlamaForSequenceClassification, BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 import re
-
+from .augment_network import AugmentNetwork
+from omegaconf import OmegaConf, DictConfig
+import torch.nn.functional as F
 logger = logging.getLogger(__name__)
+
+# aug loss
+def consist_loss(p_logits, q_logits, threshold):
+    if p_logits.size()[-1] == 1:
+        return F.mse_loss(p_logits, q_logits)
+    else:
+        p = F.softmax(p_logits, dim=1)
+        logp = F.log_softmax(p_logits, dim=1)
+        logq = F.log_softmax(q_logits, dim=1)
+        loss = torch.sum(p * (logp - logq), dim=-1)
+        q = F.softmax(q_logits, dim=1)
+        q_largest = torch.max(q, dim=1)[0]
+        loss_mask = torch.gt(q_largest, threshold).float()
+        loss = loss * loss_mask
+        return torch.mean(loss)
+
+# alignment loss
+def KL_loss(p_logits, q_logits): # 虽然写的是kl loss，但是对于regression任务也用不了。
+    if p_logits.size()[-1] == 1: # regression
+        mse_loss = nn.MSELoss()
+        return mse_loss(p_logits, q_logits)
+    else:
+        kl_loss = nn.KLDivLoss(reduction="batchmean", log_target = True)
+        # input should be a distribution in the log space
+        input = F.log_softmax(p_logits, dim=1)
+        # Sample a batch of distributions. Usually this would come from the dataset
+        target = F.log_softmax(q_logits, dim=1)
+        return kl_loss(input, target)
+
 
 
 class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
@@ -51,6 +82,8 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         use_llama: Optional[bool] = False,
         use_llama_7B: Optional[bool] = False,
         use_contrastive_loss:  Optional[bool] = False,
+        alignment_loss: Optional[str] = None,
+        aug_config: Optional[DictConfig] = None,
     ):
         """
         Parameters
@@ -243,6 +276,14 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         self.adapter.apply(init_weights)
         if not use_llama and not use_llama_7B:
             self.head.apply(init_weights)
+
+        # Initialize Augmentation Network
+        self.augmenter = None
+        self.aug_config = aug_config
+        if aug_config != None and aug_config.turn_on:
+            self.adapter_out_dim = base_in_feat
+            self.augmenter = self.construct_augnet()
+
         self.name_to_id = self.get_layer_ids()
         if use_llama or use_llama_7B:
             for k, v in self.name_to_id.items():
@@ -250,6 +291,18 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                     if "lora" not in k and "score" not in k:
                         self.name_to_id[k] = v + 1
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
+        
+        # alignment loss
+        self.alignment_loss = alignment_loss
+
+        
+    def construct_augnet(self):
+        model_feature_dict = [
+            (per_model.prefix, per_model.out_features) for per_model in self.model
+        ]
+        return AugmentNetwork(
+            self.aug_config, model_feature_dict, self.adapter_out_dim, len(self.model), use_fusion_transformer=True
+        )
 
     @property
     def label_key(self):
@@ -274,9 +327,75 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                 )
                 output.update(per_output)
 
+        alignment_loss = None
+        if self.alignment_loss == "KL":
+            alignment_loss = 0.
+            num = 0
+            for i in range(len(multimodal_logits)):
+                for j in range(len(multimodal_logits)):
+                    if i == j: continue
+                    alignment_loss += KL_loss(multimodal_logits[i], multimodal_logits[j])
+                    num += 1
+            alignment_loss = alignment_loss / num # run1
+            # alignment_loss = 0.1 * alignment_loss # run2
+            # alignment_loss = 0.5 * alignment_loss # run3
+        elif self.alignment_loss == "KL_feature":
+            alignment_loss = 0.
+            num = 0
+            for i in range(len(multimodal_features)):
+                for j in range(len(multimodal_features)):
+                    if i == j: continue
+                    alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
+                    num += 1
+            alignment_loss = alignment_loss / num # run1
+            # alignment_loss = 0.1 * alignment_loss # run2
+
+            alignment_loss = alignment_loss / num # run1
+            
+
+
         multimodal_features = torch.cat(multimodal_features, dim=1)
         multimodal_features = self.cls_token(multimodal_features)
-        # 记得image concat all
+        # pass through augmentation network after adapter
+        aug_loss = None
+
+        if self.training:
+            if self.augmenter is not None:
+                # train augment network
+                aug_loss = {}
+                detached_feature = multimodal_features.detach().clone()  # [bs, dim]
+
+                new, m, v = self.augmenter(detached_feature)
+                regularize_loss = self.augmenter.l2_regularize(detached_feature, new) # vae的重构损失。
+                KLD_loss = (
+                    self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
+                )
+
+                with torch.no_grad():
+                    ori_logits = self.head(self.fusion_transformer(detached_feature))
+                aug_logits = self.head(self.fusion_transformer(new))
+                consist_reg = consist_loss(
+                    aug_logits, ori_logits.detach(), self.aug_config.consist_t
+                )
+                aug_loss.update(
+                    {
+                        "consist_loss": consist_reg,
+                        "cons_weight": self.aug_config.consist_loss_weight,
+                        "regularizer": regularize_loss,
+                        "reg_weight": self.aug_config.regularizer_loss_weight,
+                        "KLD_loss": KLD_loss,
+                        "kl_weight": self.aug_config.kl_loss_weight,
+                    }
+                )
+
+                after_augment = new.clone()
+                after_augment.register_hook(
+                    lambda grad: -grad * (self.aug_config.adv_weight)
+                )
+                multimodal_features = torch.cat(
+                    [multimodal_features, after_augment], dim=0
+                )
+
         if not self.use_llama and not self.use_llama_7B:
             features = self.fusion_transformer(multimodal_features)
             logits = self.head(features)
@@ -291,6 +410,13 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                 FEATURES: features,
             }
         }
+
+        if alignment_loss != None:
+            fusion_output[self.prefix].update({"alignment_loss": alignment_loss}) 
+        
+        if aug_loss is not None:
+            fusion_output[self.prefix].update({"augmenter": aug_loss})
+
         if self.loss_weight is not None:
             fusion_output[self.prefix].update({WEIGHT: torch.tensor(1.0).to(logits)})
             output.update(fusion_output)

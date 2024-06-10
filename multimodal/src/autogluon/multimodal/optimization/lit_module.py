@@ -259,19 +259,37 @@ class LitModule(pl.LightningModule):
                     and self.model.aug_config.turn_on
                 ):
 
+                    ori_label = label
+                    label = label.tile((2,))
+                    if "manifold_mixup_lam" in per_output.keys():
+                        indices = per_output["manifold_mixup_indices"]
+                        indices = indices.tile((2,))
+                        lam = per_output["manifold_mixup_lam"]
+                        if num_classes > 1:
+                            label_onehot = to_one_hot(label, num_classes)
+                            label_shuffled_onehot = label_onehot[indices]
+                            label = label_onehot * lam + label_shuffled_onehot * (1 - lam)
+                        else:
+                            label = label * lam + label[indices] * (1 - lam)
+                    elif isinstance(self.loss_func, SoftTargetCrossEntropy):
+                        label = to_one_hot(label, num_classes)
+
                     loss += (
                         self.loss_func(
                             input=per_output[LOGITS].squeeze(dim=1),
-                            target=label.tile((2,)),
+                            target=label,
                         )
                     )
+                    label = ori_label
                     self.log("loss/target", loss, prog_bar=True)
             elif (
                 TEMPLATE_LOGITS in per_output and self.model.prefix == T_FEW
             ):  # Do only add template loss if T-Few. #TODO Add compatibility to Fusion models.
                 loss += self._compute_template_loss(per_output, label) * weight
             else:
+                if LOGITS not in per_output: continue
                 num_classes = per_output[LOGITS].size()[-1]
+                ori_label = label
                 if "manifold_mixup_lam" in per_output.keys():
                     indices = per_output["manifold_mixup_indices"]
                     lam = per_output["manifold_mixup_lam"]
@@ -291,6 +309,7 @@ class LitModule(pl.LightningModule):
                     )
                     * weight
                 )
+                label = ori_label
         if "augmenter" in output.keys():
             reg_loss = 0
             kl_loss = 0
@@ -375,7 +394,7 @@ class LitModule(pl.LightningModule):
         -------
         Average loss of the mini-batch data.
         """
-        if self.hparams.aug_optimizer:
+        if self.hparams.aug_optimizer and self.contra_loss == "":
             if self.hparams.aug_turn_on:
                 target_optimizer, aug_optimizer = self.optimizers()
             else:
@@ -394,16 +413,21 @@ class LitModule(pl.LightningModule):
 
                 target_optimizer.step()
                 target_opt_scheduler.step()
-                if self.hparams.aug_turn_on:
+                if  "fusion" in self.model.__class__.__name__.lower() and self.hparams.aug_turn_on:
                     aug_optimizer.step()
 
                 target_optimizer.zero_grad()
-                if self.hparams.aug_turn_on:
+                if  "fusion" in self.model.__class__.__name__.lower() and self.hparams.aug_turn_on:
                     aug_optimizer.zero_grad()
 
                     
         elif self.contra_loss != "" and self.hparams.grad_steps > 1:
-            optimizer = self.optimizers()
+            if self.hparams.aug_optimizer and self.hparams.aug_turn_on:
+                optimizer, aug_optimizer = self.optimizers()
+            else:
+                optimizer = self.optimizers()
+                
+            # optimizer = self.optimizers()
             scheduler = self.lr_schedulers()
 
             # First, cache the features without any gradient tracking.
@@ -414,7 +438,7 @@ class LitModule(pl.LightningModule):
                 # self.loss_list.append(loss)
 
             for key, per_output in output.items():
-                if key.startswith("fusion"): continue
+                if key.startswith("fusion") or key.startswith("alignment") or key == "clip_fusion_mlp" or key == "augmenter" : continue
                 if key in self.accum_features:
                     if self.contra_loss == "contra_logit":
                         self.accum_features[key].append(per_output[LOGITS])
@@ -455,7 +479,11 @@ class LitModule(pl.LightningModule):
 
             optimizer.step()
             scheduler.step()
+            if self.hparams.aug_optimizer and self.hparams.aug_turn_on:
+                aug_optimizer.step()
             optimizer.zero_grad()
+            if self.hparams.aug_optimizer and self.hparams.aug_turn_on:
+                aug_optimizer.zero_grad()
 
             self.temp_model = copy.deepcopy(self.model)
             for v in self.temp_model.parameters():

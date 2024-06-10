@@ -137,6 +137,7 @@ class AugmentNetwork(nn.Module):
         feature_dims: Optional[List[Tuple]],
         adapter_out_dim: Optional[int],
         n_modality: Optional[int],
+        use_fusion_transformer: bool=False
     ) -> None:
         super().__init__()
         print("Initializaing Augmentation Network")
@@ -147,7 +148,10 @@ class AugmentNetwork(nn.Module):
         print("feature_dims", self.feature_dims)
         print("after adapter dim", adapter_out_dim)
         if config.arch == "mlp_vae":
-            d = adapter_out_dim * len(feature_dims)
+            if use_fusion_transformer:
+                d = adapter_out_dim
+            else:
+                d = adapter_out_dim * len(feature_dims)
             step = int((d - self.config.z_dim) / (self.config.n_layer + 1))
             hidden = [*range(d - step, self.config.z_dim + step, -step)]
             self.augnets = VAE(input_dim=d, hidden_dim=hidden, z_dim=self.config.z_dim)
