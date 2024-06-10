@@ -456,10 +456,7 @@ class MultiModalFeaturePreprocessor(TransformerMixin, BaseEstimator):
                 else: 
                     processed_data = col_value.apply(lambda ele: "" if pd.isnull(ele) else str(ele))
             elif col_type == NUMERICAL:
-                if self._config.numerical.convert_to_text_use_header:
-                    processed_data = pd.to_numeric(col_value).apply(lambda ele: "{}:{:.3f}".format(col_name, ele))
-                else:
-                    processed_data = pd.to_numeric(col_value).apply("{:.3f}".format)
+                processed_data = pd.to_numeric(col_value).apply("{:.3f}".format)
             elif col_type == f"{TEXT}_{IDENTIFIER}":
                 processed_data = col_value
             else:
