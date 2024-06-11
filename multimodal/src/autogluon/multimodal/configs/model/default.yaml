@@ -40,6 +40,7 @@ model:
       # - "syn_replacement(0.05)"  # less than 0.1 based on eda paper
       # - "insert_punc(0.05)"
     early_fusion: False
+    meta_transformer_ckpt_path: None
     sequential_fusion: False
     use_miss_token_embed: False
     manifold_mixup: False
@@ -81,6 +82,7 @@ model:
     text_aug_detect_length: 10                # We perform text augmentation only if a text has more than text_detection_length words. It is used to differentiate text columns versus tabular columns that are treated as text.
     text_trivial_aug_maxscale: 0.0            # augmentation magnitude randomly drawn from [0, text_trivial_aug_maxscale]
     early_fusion: False
+    meta_transformer_ckpt_path: None
     sequential_fusion: False
     use_miss_token_embed: False
   t_few:
@@ -115,6 +117,7 @@ model:
     image_size: null
     max_img_num_per_col: 2
     early_fusion: False
+    meta_transformer_ckpt_path: None
     sequential_fusion: False
     use_miss_token_embed: False
     pooling_mode: ""
@@ -226,6 +229,7 @@ model:
     drop_rate: 0.1
     normalization: "layer_norm"
     early_fusion: False
+    meta_transformer_ckpt_path: None
     data_types:
     augmenter:
       turn_on: False
@@ -253,19 +257,11 @@ model:
     drop_rate: 0.1
     normalization: "layer_norm"
     early_fusion: False
+    meta_transformer_ckpt_path: None
     sequential_fusion: False
     data_types:
     
   fusion_metatransformer:
-    # weight: 0.1
-    # adapt_in_features: "max"
-    # hidden_sizes:
-    #   - 128
-    # activation: "leaky_relu"
-    # drop_rate: 0.1
-    # normalization: "layer_norm"
-    # early_fusion: False
-    # data_types:
     hidden_size: 192
     n_blocks: 3
     attention_n_heads: 8
@@ -281,6 +277,7 @@ model:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     early_fusion: False
+    meta_transformer_ckpt_path: None
 
   fusion_ner:
     weight:
@@ -307,8 +304,9 @@ model:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     early_fusion: False
-    use_llama: False
+    meta_transformer_ckpt_path: None
     use_llama_7B: False
+    llama_7B_token: None
     augmenter:
       turn_on: False
       arch: "mlp_vae"   #  trans_vae / mlp_vae
@@ -347,6 +345,7 @@ model:
     pooling_mode: "cls"
     checkpoint_name: null
     early_fusion: False
+    meta_transformer_ckpt_path: None
     sequential_fusion: False
     use_miss_token_embed: False
     manifold_mixup: False
