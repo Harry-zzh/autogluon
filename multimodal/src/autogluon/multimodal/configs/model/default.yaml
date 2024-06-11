@@ -240,19 +240,6 @@ model:
     early_fusion: False
     sequential_fusion: False
     data_types:
-    augmenter:
-      turn_on: False
-      arch: "mlp_vae"   #  trans_vae / mlp_vae
-      z_dim: 8
-      n_layer: 4
-      n_head: 8
-      tran_hidden: 2048
-      kl_loss_weight: 0.1
-      regularizer_loss_weight: 0.1
-      adv_weight: 0.0001
-      consist_reg: True
-      consist_loss_weight: 0.01
-      consist_t: 0.5
     
   fusion_metatransformer:
     # weight: 0.1
@@ -279,7 +266,7 @@ model:
     additive_attention: False # Whether to use lightweight additive attention, can be True, False or "auto"
     share_qv_weights: False # Whether to share weight for query and value, can be True, False or "auto"
     early_fusion: False
-    sequential_fusion: False
+
   fusion_ner:
     weight:
     adapt_in_features: "max"

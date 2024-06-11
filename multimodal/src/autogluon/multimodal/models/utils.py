@@ -811,7 +811,7 @@ def run_model(model: nn.Module, batch: dict, trt_model: Optional[nn.Module] = No
                 batch[k] = batch[k].to(torch.int64)
     if (not isinstance(pure_model, DocumentTransformer)) and isinstance(pure_model, supported_models):
         input_vec = [batch[k] for k in pure_model.input_keys]
-         # 专门为sequential fusion写的
+        # for sequential fusion
         if 'pre_state' in batch.keys():
             input_vec.append(batch['pre_state'])
         column_names, column_values = [], []

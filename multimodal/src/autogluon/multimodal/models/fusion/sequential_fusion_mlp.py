@@ -11,7 +11,6 @@ from .base import AbstractMultimodalFusionModel
 from ..clipfusion_mlp import CLIPForImageText_fusionmlp
 
 from omegaconf import OmegaConf, DictConfig
-# from .augment_network import AugmentNetwork
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
 logger = logging.getLogger(__name__)
@@ -46,7 +45,6 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         dropout_prob: Optional[float] = 0.5,
         normalization: Optional[str] = "layer_norm",
         loss_weight: Optional[float] = None,
-        aug_config: Optional[DictConfig] = None,
     ):
         """
         Parameters
@@ -94,7 +92,7 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
 
         raw_in_features = [per_model.out_features for per_model in models]
         
-        if adapt_in_features is not None: # 默认是max
+        if adapt_in_features is not None: # default: max
             if adapt_in_features == "min":
                 base_in_feat = min(raw_in_features)
             elif adapt_in_features == "max":
@@ -102,12 +100,6 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             else:
                 raise ValueError(f"unknown adapt_in_features: {adapt_in_features}")
 
-            # 不需要了
-            # self.adapter = nn.ModuleList([nn.Linear(in_feat, base_in_feat) for in_feat in raw_in_features])
-           
-
-           
-            # 虽然clip只有一个model，但是是image 和 text的late fusion
             has_clip = False
             for model_name in models:
                 if isinstance(model_name, CLIPForImageText_fusionmlp):
@@ -121,62 +113,22 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             self.adapter = nn.ModuleList([nn.Identity() for _ in range(len(raw_in_features))])
             in_features = sum(raw_in_features)
 
-        # state token的转换
-        # 初始state
+        # initialize the state
         self.init_state = TrainableInitState(base_in_feat)
 
         self.state_adapter = nn.ModuleList([])
         pre_feat = base_in_feat
-        for i in range(len(raw_in_features)): # 最后一个的state token无需转换了。
+        for i in range(len(raw_in_features)):
             self.state_adapter.append(nn.Linear(pre_feat, raw_in_features[i]))
             pre_feat = raw_in_features[i]
-
-        # assert len(self.adapter) == len(self.model)
-
-        # fusion_mlp = []
-        # for per_hidden_features in hidden_features:
-        #     fusion_mlp.append(
-        #         MLP(
-        #             in_features=in_features,
-        #             hidden_features=per_hidden_features,
-        #             out_features=per_hidden_features,
-        #             num_layers=1,
-        #             activation=activation,
-        #             dropout_prob=dropout_prob,
-        #             normalization=normalization,
-        #         )
-        #     )
-        #     in_features = per_hidden_features
-        # self.fusion_mlp = nn.Sequential(*fusion_mlp)
-        # in_features has become the latest hidden size
-        # self.head = nn.Linear(in_features, num_classes)
         self.head = nn.Linear(raw_in_features[-1], num_classes)
 
-        # Initialize Augmentation Network
-        self.augmenter = None
-        self.aug_config = aug_config
-        if aug_config != None and aug_config.turn_on:
-            self.augmenter = self.construct_augnet()
-
-        # init weights
-        # self.adapter.apply(init_weights)
-        # self.fusion_mlp.apply(init_weights)
         self.head.apply(init_weights)
         
          
         self.out_features = in_features
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
-
-       
-
-    def construct_augnet(self):
-        model_feature_dict = [
-            (per_model.prefix, per_model.out_features) for per_model in self.model
-        ]
-        return AugmentNetwork(
-            self.aug_config, model_feature_dict, self.adapter_out_dim, len(self.model)
-        )
 
 
     @property
@@ -219,96 +171,20 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         for per_model, per_adapter in zip(self.model, self.state_adapter): # 这里的per_adapter来自self.state_adapter
             per_model_args = args[offset : offset + len(per_model.input_keys)]
             batch = dict(zip(per_model.input_keys, per_model_args))
-            # 在batch这里要加一个上一步的state 
-            # 它还要算stage change loss
-            # 它算metric是拿最后一个的输出
-            batch['pre_state'] = per_adapter(pre_state)
+            batch['pre_state'] = per_adapter(pre_state) # the state from the previous encoder
             cur_model_idx += 1
             per_output = run_model(per_model, batch)
-            pre_state = per_output[per_model.prefix]["state"] # 或许可以各自有个cls token, state只是用于融合之前的模态
-            # if hasattr(per_model, "prefix_dict"): # for CLIP model only
-            #     for prefix in per_model.prefix_dict:
-            #         multimodal_features.append(
-            #         per_adapter(per_output[prefix][FEATURES].to(per_adapter.weight.dtype))
-            #         )
-            # else:
-            # features 通常是cls token
+            pre_state = per_output[per_model.prefix]["state"] 
             if cur_model_idx == len(self.model):
-                multimodal_features = per_output[per_model.prefix][FEATURES] # 取最后一步的state
+                multimodal_features = per_output[per_model.prefix][FEATURES] # get the last state
             
             multimodal_logits.append(per_output[per_model.prefix][LOGITS])
             offset += len(per_model.input_keys)
-        
-        # multimodal_features = torch.cat(multimodal_features, dim=1)
-
-        # pass through augmentation network after adapter
-        aug_loss = None
-
-        if self.training:
-            if self.augmenter is not None:
-                # train augment network
-                aug_loss = {}
-                detached_feature = multimodal_features.detach().clone()  # [8, 512]
-
-                new, m, v = self.augmenter(detached_feature)
-                regularize_loss = self.augmenter.l2_regularize(detached_feature, new)
-                KLD_loss = (
-                    self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
-                )
-
-                with torch.no_grad():
-                    ori_logits = self.head(self.fusion_mlp(detached_feature))
-                aug_logits = self.head(self.fusion_mlp(new))
-                consist_reg = consist_loss(
-                    aug_logits, ori_logits.detach(), self.aug_config.consist_t
-                )
-                aug_loss.update(
-                    {
-                        "consist_loss": consist_reg,
-                        "cons_weight": self.aug_config.consist_loss_weight,
-                        "regularizer": regularize_loss,
-                        "reg_weight": self.aug_config.regularizer_loss_weight,
-                        "KLD_loss": KLD_loss,
-                        "kl_weight": self.aug_config.kl_loss_weight,
-                    }
-                )
-
-                after_augment = new.clone()
-                after_augment.register_hook(
-                    lambda grad: -grad * (self.aug_config.adv_weight)
-                )
-                multimodal_features = torch.cat(
-                    [multimodal_features, after_augment], dim=0
-                )
-
-        # features = self.fusion_mlp(multimodal_features)
-        # logits = self.head(features)
-        # fusion_output = {
-        #     self.prefix: {
-        #         LOGITS: logits,
-        #         FEATURES: features,
-        #     }
-        # }
-        # if self.loss_weight is not None:
-        #     fusion_output[self.prefix].update({WEIGHT: 1})
-        #     output.update(fusion_output)
-        # else:
-        #     output = fusion_output
-
-        # if aug_loss is not None:
-        #     output.update({"augmenter": aug_loss})
-
-        # return output
-    
-        # features = self.fusion_mlp(multimodal_features)
+      
         features = multimodal_features
         logits = self.head(features)
 
-        if aug_loss is not None:
-            return features, logits, multimodal_logits, aug_loss
-        
-        else:
-             return features, logits, multimodal_logits
+        return features, logits, multimodal_logits
 
     def get_output_dict(self, features: torch.Tensor, logits: torch.Tensor, multimodal_logits: List[torch.Tensor]):
         fusion_output = {

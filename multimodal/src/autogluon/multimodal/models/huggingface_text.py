@@ -43,7 +43,7 @@ def forward_for_sequential_fusion(
     output_attentions: Optional[bool] = None,
     output_hidden_states: Optional[bool] = None,
     return_dict: Optional[bool] = None,
-    pre_state: Optional[torch.Tensor] = None,
+    pre_state: Optional[torch.Tensor] = None, # for sequential fusion
 ):
     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
     output_hidden_states = (
@@ -80,7 +80,6 @@ def forward_for_sequential_fusion(
     )
     if pre_state != None:
         attention_mask = torch.cat((attention_mask, torch.ones((1, 1), device=device)), dim=1)
-    if pre_state != None:
         embedding_output = torch.cat((pre_state.unsqueeze(1), embedding_output), dim=1)
     encoder_outputs = self.encoder(
         embedding_output,

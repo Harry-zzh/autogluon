@@ -375,7 +375,6 @@ def create_model(
             dropout_prob=model_config.drop_rate,
             normalization=model_config.normalization,
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
-            aug_config=OmegaConf.select(model_config, "augmenter"),
         )
     elif model_name.lower().startswith(FUSION_NER):
         model = functools.partial(
