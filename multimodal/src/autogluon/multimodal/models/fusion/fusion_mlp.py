@@ -139,7 +139,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                     if has_image and has_text:
                         in_features = base_in_feat * (len(raw_in_features) + 1)
                     else:
-                        in_features = base_in_feat * (len(raw_in_features)) # image / text没了。
+                        in_features = base_in_feat * (len(raw_in_features)) # image only or text only
                 else:
                     in_features = base_in_feat * (len(raw_in_features) + 1)
             else:
