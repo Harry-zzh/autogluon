@@ -350,17 +350,6 @@ def create_model(
 
         )
     elif model_name.lower().startswith(FUSION_METATRANSFORMER):
-        # model = functools.partial(
-        #     MultimodalMetaTransformer,
-        #     prefix=model_name,
-        #     hidden_features=model_config.hidden_sizes,
-        #     num_classes=num_classes,
-        #     adapt_in_features=model_config.adapt_in_features,
-        #     activation=model_config.activation,
-        #     dropout_prob=model_config.drop_rate,
-        #     normalization=model_config.normalization,
-        #     loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
-        # )
         model = functools.partial(
             MultimodalMetaTransformer,
             prefix=model_name,
@@ -427,8 +416,8 @@ def create_model(
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
             additive_attention=OmegaConf.select(model_config, "additive_attention", default=False),
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
-            use_llama=model_config.use_llama if hasattr(model_config, "use_llama") else False,
             use_llama_7B=model_config.use_llama_7B if hasattr(model_config, "use_llama_7B") else False,
+            llama_7B_token=model_config.llama_7B_token if hasattr(model_config, "llama_7B_token") else None,
             aug_config=model_config.augmenter if hasattr(model_config, "augmenter") else None,
             alignment_loss=model_config.alignment_loss if hasattr(model_config, "alignment_loss") else None,
         )
