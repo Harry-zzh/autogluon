@@ -83,14 +83,9 @@ class CLIPForImageText_fusionmlp(nn.Module):
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
-        # if use_miss_token_embed:
-        #     # use_miss_token_embed_forward = forward_for_miss_token.__get__(self.model, self.model.__class__)
-        #     # setattr(self.model, "forward", use_miss_token_embed_forward)
-        #     self.model.miss_token_embed = nn.Embedding(1, 512)
-        # else:
+
         self.model.miss_token_embed = None
 
-        # self.model.miss_token_embed = use_miss_token_embed
 
     @property
     def text_token_ids_key(self):
@@ -169,8 +164,6 @@ class CLIPForImageText_fusionmlp(nn.Module):
             image_features = image_features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
 
             # normalized features
-            # image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            # 默认除以二范数
             image_features = image_features / torch.clamp(image_features.norm(dim=-1, keepdim=True), min=1e-6)  # (b, num_features)
 
             # collect image features by image column names
