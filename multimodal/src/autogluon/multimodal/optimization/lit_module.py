@@ -382,8 +382,6 @@ class LitModule(pl.LightningModule):
             scheduler = self.lr_schedulers()
 
             # First, cache the features without any gradient tracking.
-            # 大概知道了 training step forward twice，第二次算出来的gradient大部分是None。deepcopy一个model
-            # self.model.eval()
             with torch.no_grad():
                 output, loss = self._shared_step(batch, use_temp=True)
                 # self.loss_list.append(loss)
