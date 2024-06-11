@@ -136,6 +136,7 @@ class HFAutoModelForTextPrediction(nn.Module):
         use_fast: Optional[bool] = True,
         early_fusion: bool = False,
         sequential_fusion: bool = False,
+        use_miss_token_embed: bool = False,
     ):
         """
         Load a pretrained huggingface text transformer backbone.
