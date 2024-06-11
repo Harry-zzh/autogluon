@@ -29,8 +29,8 @@ def forward_for_miss_token(self, x, image_valid_num):
 def forward_feature_for_miss_token(self, x, image_valid_num):
     x = self.patch_embed(x)
     B, H, W, C = x.size()
-    for idx, v in enumerate(image_valid_num): # 换成miss token
-        if v.item() == 0:
+    for idx, v in enumerate(image_valid_num):
+        if v.item() == 0:  # use image missing embed for missing image
             x[idx] = self.miss_token_embed(torch.tensor(0).to(x.device)).reshape(H,W,C)
     
     x = self.layers(x)
@@ -419,7 +419,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
                 logits = self.head(features)
             steps = torch.arange(0, n).type_as(image_valid_num)
 
-            ###  如果要用missing token，那么不要image_masks!!!
             if not self.use_miss_token_embed:
                 image_masks = (steps.reshape((1, -1)) < image_valid_num.reshape((-1, 1))).type_as(features)  # (b, n)
                 features = features.reshape((b, n, -1)) * image_masks[:, :, None]  # (b, n, num_features)
