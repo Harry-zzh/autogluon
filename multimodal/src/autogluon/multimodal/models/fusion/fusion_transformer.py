@@ -18,21 +18,18 @@ logger = logging.getLogger(__name__)
 
 # aug loss
 def consist_loss(p_logits, q_logits, threshold):
-    if p_logits.size()[-1] == 1:
-        return F.mse_loss(p_logits, q_logits)
-    else:
-        p = F.softmax(p_logits, dim=1)
-        logp = F.log_softmax(p_logits, dim=1)
-        logq = F.log_softmax(q_logits, dim=1)
-        loss = torch.sum(p * (logp - logq), dim=-1)
-        q = F.softmax(q_logits, dim=1)
-        q_largest = torch.max(q, dim=1)[0]
-        loss_mask = torch.gt(q_largest, threshold).float()
-        loss = loss * loss_mask
-        return torch.mean(loss)
+    p = F.softmax(p_logits, dim=1)
+    logp = F.log_softmax(p_logits, dim=1)
+    logq = F.log_softmax(q_logits, dim=1)
+    loss = torch.sum(p * (logp - logq), dim=-1)
+    q = F.softmax(q_logits, dim=1)
+    q_largest = torch.max(q, dim=1)[0]
+    loss_mask = torch.gt(q_largest, threshold).float()
+    loss = loss * loss_mask
+    return torch.mean(loss)
 
 # alignment loss
-def KL_loss(p_logits, q_logits): # 虽然写的是kl loss，但是对于regression任务也用不了。
+def KL_loss(p_logits, q_logits):
     if p_logits.size()[-1] == 1: # regression
         mse_loss = nn.MSELoss()
         return mse_loss(p_logits, q_logits)
@@ -366,7 +363,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                 detached_feature = multimodal_features.detach().clone()  # [bs, dim]
 
                 new, m, v = self.augmenter(detached_feature)
-                regularize_loss = self.augmenter.l2_regularize(detached_feature, new) # vae的重构损失。
+                regularize_loss = self.augmenter.l2_regularize(detached_feature, new)
                 KLD_loss = (
                     self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
                 )
