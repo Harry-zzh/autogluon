@@ -125,8 +125,6 @@ class CLIPForImageText_fusionmlp(nn.Module):
                             self.visual_module_list.append(m)
                     else: 
                         continue
-        print()
-        # self.model.miss_token_embed = use_miss_token_embed
 
     @property
     def text_token_ids_key(self):

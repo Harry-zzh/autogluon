@@ -126,24 +126,6 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
             self.state_adapter.append(nn.Linear(pre_feat, raw_in_features[i]))
             pre_feat = raw_in_features[i]
 
-        # assert len(self.adapter) == len(self.model)
-
-        # fusion_mlp = []
-        # for per_hidden_features in hidden_features:
-        #     fusion_mlp.append(
-        #         MLP(
-        #             in_features=in_features,
-        #             hidden_features=per_hidden_features,
-        #             out_features=per_hidden_features,
-        #             num_layers=1,
-        #             activation=activation,
-        #             dropout_prob=dropout_prob,
-        #             normalization=normalization,
-        #         )
-        #     )
-        #     in_features = per_hidden_features
-        # self.fusion_mlp = nn.Sequential(*fusion_mlp)
-        # in_features has become the latest hidden size
         # self.head = nn.Linear(in_features, num_classes)
         self.head = nn.Linear(raw_in_features[-1], num_classes)
 
@@ -190,9 +172,9 @@ class SequentialMultimodalFusionMLP(AbstractMultimodalFusionModel):
         multimodal_logits = []
         offset = 0
     
-        pre_state = self.init_state(args[0].size()[0]) # batch size
+        pre_state = self.init_state(args[-1].size()[0]) # batch size
         cur_model_idx = 0 
-        for per_model, per_adapter in zip(self.model, self.state_adapter): # 这里的per_adapter来自self.state_adapter
+        for per_model, per_adapter in zip(self.model, self.state_adapter):
             per_model_args = args[offset : offset + len(per_model.input_keys)]
             batch = dict(zip(per_model.input_keys, per_model_args))
             batch['pre_state'] = per_adapter(pre_state) # the state from the previous encoder

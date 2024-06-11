@@ -12,6 +12,8 @@ from .utils import assign_layer_ids
 import copy
 import re
 import numpy as np
+import logging
+
 logger = logging.getLogger(__name__)
 
 class CategoricalFeatureTokenizer(nn.Module):

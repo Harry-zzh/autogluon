@@ -370,6 +370,7 @@ def create_model(
             loss_weight=model_config.weight if hasattr(model_config, "weight") else None,
             additive_attention=OmegaConf.select(model_config, "additive_attention", default=False),
             share_qv_weights=OmegaConf.select(model_config, "share_qv_weights", default=False),
+            meta_transformer_ckpt_path=model_config.meta_transformer_ckpt_path if hasattr(model_config, "meta_transformer_ckpt_path") else None,
         )
     elif model_name.lower().startswith(SEQUENTIAL_FUSION_MLP):
         model = functools.partial(

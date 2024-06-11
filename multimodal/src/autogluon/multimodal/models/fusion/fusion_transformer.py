@@ -29,7 +29,7 @@ def consist_loss(p_logits, q_logits, threshold):
     return torch.mean(loss)
 
 # alignment loss
-def KL_loss(p_logits, q_logits):
+def cal_alignment_loss(p_logits, q_logits):
     if p_logits.size()[-1] == 1: # regression
         mse_loss = nn.MSELoss()
         return mse_loss(p_logits, q_logits)
@@ -78,6 +78,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         share_qv_weights: Optional[bool] = False,
         use_llama: Optional[bool] = False,
         use_llama_7B: Optional[bool] = False,
+        llama_7B_token: Optional[str] = None,
         use_contrastive_loss:  Optional[bool] = False,
         alignment_loss: Optional[str] = None,
         aug_config: Optional[DictConfig] = None,
@@ -155,9 +156,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
 
         raw_in_features = [per_model.out_features for per_model in models]
 
-        if use_llama:
-            base_in_feat = 2048
-        elif use_llama_7B:
+        if use_llama_7B:
             base_in_feat = 4096
         elif adapt_in_features == "min":
             base_in_feat = min(raw_in_features)
@@ -172,47 +171,17 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
         in_features = base_in_feat
 
         assert len(self.adapter) == len(self.model)
-        self.use_llama = use_llama
-        self.use_llama_7B = use_llama_7B
-        if use_llama:
 
-            # self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
-            # "meta-llama/Llama-2-7b-hf", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
-            self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
-            "TinyLlama/TinyLlama-1.1B-intermediate-step-1195k-token-2.5T", cache_dir="/home/ubuntu/drive2", num_labels=num_classes,) #torch_dtype=torch.float16    )
-            
-            filter = ["q", "k", "v"]
-            efficient_finetune = "lora"
-            lora_r = 3
-            lora_alpha = 32
-            for m_name, module in dict(self.fusion_transformer.named_modules()).items():
-                for c_name, layer in dict(module.named_children()).items():
-                    if not filter or any(re.match(filter_layer, c_name) for filter_layer in filter):
-                        assert isinstance(
-                            layer, nn.Linear
-                        ), f"LoRA can only be applied to torch.nn.Linear, but {layer} is {type(layer)}."
-                        adaptation_layer = create_adaptation(efficient_finetune, layer, lora_r, lora_alpha)
-                        adaptation_layer.weight = layer.weight
-                        adaptation_layer.bias = layer.bias
-                        setattr(module, c_name, adaptation_layer)
-            for k, v in self.fusion_transformer.named_parameters():
-                if "lora" not in k and "score" not in k:
-                    v.requires_grad = False
-                else:
-                    v.requires_grad = True
-                    print(k)
-            # in_features = 4096
-        elif use_llama_7B:
-            quantization_config=BitsAndBytesConfig(
+        self.use_llama_7B = use_llama_7B
+        if use_llama_7B:
+            quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
-                # bnb_4bit_compute_dtype=torch.bfloat16,
-                # bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_quant_type='nf4'
             )
             # quantization_config
             self.fusion_transformer = LlamaForSequenceClassification.from_pretrained(
-            "meta-llama/Llama-2-7b-hf", num_labels=num_classes, quantization_config=quantization_config, cache_dir="/home/ubuntu/drive2", )#torch_dtype=torch.bfloat16) #torch_dtype=torch.float16    )
+            "meta-llama/Llama-2-7b-hf", num_labels=num_classes, quantization_config=quantization_config,token=llama_7B_token,)
             self.fusion_transformer = prepare_model_for_kbit_training(self.fusion_transformer)
             lora_config = LoraConfig(
                 r=3,
@@ -224,9 +193,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
             for k, v in self.fusion_transformer.named_parameters():
                 if "score" in k:
                     v.requires_grad = True
-                if v.requires_grad:
-                    print(k)
-            print()
+
         else:
             self.fusion_transformer = Custom_Transformer(
                 d_token=in_features,
@@ -298,7 +265,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
             (per_model.prefix, per_model.out_features) for per_model in self.model
         ]
         return AugmentNetwork(
-            self.aug_config, model_feature_dict, self.adapter_out_dim, len(self.model), use_fusion_transformer=True
+            self.aug_config, model_feature_dict, self.adapter_out_dim, len(self.model)
         )
 
     @property
@@ -325,29 +292,15 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                 output.update(per_output)
 
         alignment_loss = None
-        if self.alignment_loss == "KL":
-            alignment_loss = 0.
-            num = 0
-            for i in range(len(multimodal_logits)):
-                for j in range(len(multimodal_logits)):
-                    if i == j: continue
-                    alignment_loss += KL_loss(multimodal_logits[i], multimodal_logits[j])
-                    num += 1
-            alignment_loss = alignment_loss / num # run1
-            # alignment_loss = 0.1 * alignment_loss # run2
-            # alignment_loss = 0.5 * alignment_loss # run3
-        elif self.alignment_loss == "KL_feature":
+        if self.alignment_loss == "positive-only" or self.alignment_loss == "all":
             alignment_loss = 0.
             num = 0
             for i in range(len(multimodal_features)):
                 for j in range(len(multimodal_features)):
                     if i == j: continue
-                    alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
+                    alignment_loss += cal_alignment_loss(multimodal_features[i], multimodal_features[j])
                     num += 1
-            alignment_loss = alignment_loss / num # run1
-            # alignment_loss = 0.1 * alignment_loss # run2
-
-            alignment_loss = alignment_loss / num # run1
+            alignment_loss = alignment_loss / num / num 
             
 
 
@@ -393,7 +346,7 @@ class MultimodalFusionTransformer(AbstractMultimodalFusionModel):
                     [multimodal_features, after_augment], dim=0
                 )
 
-        if not self.use_llama and not self.use_llama_7B:
+        if not self.use_llama_7B:
             features = self.fusion_transformer(multimodal_features)
             logits = self.head(features)
         else:

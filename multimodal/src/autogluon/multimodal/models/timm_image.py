@@ -295,18 +295,21 @@ class TimmAutoModelForImagePrediction(nn.Module):
                     # depths: 2, 2, 18, 2
                     self.model = create_model(self.checkpoint_name, checkpoint_path=checkpoint_path, num_classes=0)
                     # create a head with new num_classes
-                    self.head = (
-                        Linear(in_features=self.config["num_features"], out_features=num_classes)
-                        if num_classes > 0
-                        else nn.Identity()
-                    )
+                    if not early_fusion:
+                        self.head = (
+                            Linear(in_features=self.config["num_features"], out_features=num_classes)
+                            if num_classes > 0
+                            else nn.Identity()
+                        )
                     self.num_classes = num_classes if num_classes is not None else 0
             except:
                 raise ValueError(f"Timm model path {checkpoint_name} does not exist or model is invalid.")
         else:
             self.checkpoint_name = checkpoint_name
             self.model = create_model(checkpoint_name, pretrained=pretrained, num_classes=num_classes)
-            self.head = get_model_head(model=self.model)
+            # self.head = get_model_head(model=self.model)
+            if not early_fusion:
+                self.head = get_model_head(model=self.model)
             self.config = self.model.default_cfg
             self.num_classes = self.model.num_classes
 
@@ -315,8 +318,6 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         if early_fusion:
             self.out_features = self.model.embed_dim
-        elif sequential_fusion:
-            self.out_features = self.model.layers[0].dim
 
         self.global_pool = self.model.global_pool if hasattr(self.model, "global_pool") else None
         self.model.reset_classifier(0)  # remove the internal head
@@ -367,7 +368,7 @@ class TimmAutoModelForImagePrediction(nn.Module):
 
         self.use_miss_token_embed = use_miss_token_embed
 
-
+        self.early_fusion = early_fusion
         self.name_to_id = self.get_layer_ids()
         self.head_layer_names = [n for n, layer_id in self.name_to_id.items() if layer_id == 0]
 
@@ -568,6 +569,12 @@ class TimmAutoModelForImagePrediction(nn.Module):
         column_features: Optional[Dict[str, torch.Tensor]] = None,
         column_feature_masks: Optional[Dict[str, torch.Tensor]] = None,
     ):
+        if self.early_fusion:
+            return {
+                self.prefix: {
+                    FEATURES: features,
+                }
+            }
         ret = {COLUMN_FEATURES: {FEATURES: {}, MASKS: {}}}
         if self.manifold_mixup and self.training:
             ret["manifold_mixup_lam"] = self.manifold_mixup_lam

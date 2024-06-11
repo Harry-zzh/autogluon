@@ -189,9 +189,8 @@ class LitModule(pl.LightningModule):
         self.track_grad_norm = track_grad_norm
         if aug_optimizer:
             self.automatic_optimization = False
-        # self.hparams.grad_steps = 1
-        # self.automatic_optimization = False
 
+        # positive_negative loss
         self.contra_loss = contra_loss
         if  self.contra_loss != "" and self.hparams.grad_steps > 1:
             self.automatic_optimization = False
@@ -325,7 +324,7 @@ class LitModule(pl.LightningModule):
             loss = loss + reg_loss + kl_loss + c_loss
         if "alignment_loss" in output.keys():
             loss = loss + output["alignment_loss"]
-            self.log("loss/alignment_loss", output["alignment_loss"], prog_bar=True)
+            self.log("positive-only loss", output["alignment_loss"], prog_bar=True)
         return loss
 
     def _compute_metric_score(
@@ -416,7 +415,7 @@ class LitModule(pl.LightningModule):
                 if  "fusion" in self.model.__class__.__name__.lower() and self.hparams.aug_turn_on:
                     aug_optimizer.zero_grad()
 
-                    
+        # follow https://github.com/mlfoundations/open_clip/blob/main/src/training/train.py#L115
         elif self.contra_loss != "" and self.hparams.grad_steps > 1:
             if self.hparams.aug_optimizer and self.hparams.aug_turn_on:
                 optimizer, aug_optimizer = self.optimizers()
@@ -434,15 +433,9 @@ class LitModule(pl.LightningModule):
             for key, per_output in output.items():
                 if key.startswith("fusion") or key.startswith("alignment") or key == "clip_fusion_mlp" or key == "augmenter" : continue
                 if key in self.accum_features:
-                    if self.contra_loss == "contra_logit":
-                        self.accum_features[key].append(per_output[LOGITS])
-                    elif self.contra_loss == "contra_fea":
-                        self.accum_features[key].append(per_output[FEATURES])
+                    self.accum_features[key].append(per_output[FEATURES])
                 else:
-                    if self.contra_loss == "contra_logit":
-                        self.accum_features[key] = [per_output[LOGITS]]
-                    elif self.contra_loss == "contra_fea":
-                        self.accum_features[key] = [per_output[FEATURES]]
+                    self.accum_features[key] = [per_output[FEATURES]]
 
             self.accum_batch.append(batch)
             if not ((batch_idx + 1) % self.hparams.grad_steps == 0):
@@ -459,13 +452,10 @@ class LitModule(pl.LightningModule):
                 inputs = {}
                 for key, val in self.accum_features.items():
                     accumulated = self.accum_features[key]
-                    if self.contra_loss == "contra_logit":
-                        inputs[key] = torch.cat(accumulated[:j] + [output[key][LOGITS]] + accumulated[j + 1:])
-                    elif self.contra_loss == "contra_fea":
-                        inputs[key] = torch.cat(accumulated[:j] + [output[key][FEATURES]] + accumulated[j + 1:])
+                    inputs[key] = torch.cat(accumulated[:j] + [output[key][FEATURES]] + accumulated[j + 1:])
 
                 contra_loss = self.contrastive_loss_w * contrastive_loss(inputs)
-                self.log("contrastive_loss", contra_loss, prog_bar=True)
+                self.log("positive_negative loss", contra_loss, prog_bar=True)
                 self.log("target_loss", loss, prog_bar=True)
                 losses = loss + contra_loss
                 total_loss = losses  / self.hparams.grad_steps

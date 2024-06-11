@@ -27,17 +27,14 @@ def consist_loss(p_logits, q_logits, threshold):
     loss = loss * loss_mask
     return torch.mean(loss)
 
-def KL_loss(p_logits, q_logits):
-    if p_logits.size()[-1] == 1: # regression
-        mse_loss = nn.MSELoss()
-        return mse_loss(p_logits, q_logits)
-    else:
-        kl_loss = nn.KLDivLoss(reduction="batchmean", log_target = True)
-        # input should be a distribution in the log space
-        input = F.log_softmax(p_logits, dim=1)
-        # Sample a batch of distributions. Usually this would come from the dataset
-        target = F.log_softmax(q_logits, dim=1)
-        return kl_loss(input, target)
+# For Cross-modality alignment loss
+def cal_alignment_loss(p_logits, q_logits):
+    kl_loss = nn.KLDivLoss(reduction="batchmean", log_target = True)
+    # input should be a distribution in the log space
+    input = F.log_softmax(p_logits, dim=1)
+    # Sample a batch of distributions. Usually this would come from the dataset
+    target = F.log_softmax(q_logits, dim=1)
+    return kl_loss(input, target)
 
 
 class MultimodalFusionMLP(AbstractMultimodalFusionModel):
@@ -284,29 +281,15 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
             offset += len(per_model.input_keys)
         
         alignment_loss = None
-        if self.alignment_loss == "KL":
-            alignment_loss = 0.
-            num = 0
-            for i in range(len(multimodal_logits)):
-                for j in range(len(multimodal_logits)):
-                    if i == j: continue
-                    alignment_loss += KL_loss(multimodal_logits[i], multimodal_logits[j])
-                    num += 1
-            alignment_loss = alignment_loss / num # run1
-            # alignment_loss = 0.1 * alignment_loss # run2
-            # alignment_loss = 0.5 * alignment_loss # run3
-        elif self.alignment_loss == "KL_feature":
+        if self.alignment_loss == "positive-only" or self.alignment_loss == "all":
             alignment_loss = 0.
             num = 0
             for i in range(len(multimodal_features)):
                 for j in range(len(multimodal_features)):
                     if i == j: continue
-                    alignment_loss += KL_loss(multimodal_features[i], multimodal_features[j])
+                    alignment_loss += cal_alignment_loss(multimodal_features[i], multimodal_features[j])
                     num += 1
-            alignment_loss = alignment_loss / num # run1
-            # alignment_loss = 0.1 * alignment_loss # run2
-
-            alignment_loss = alignment_loss / num # run1
+            alignment_loss = alignment_loss / num / num 
             
 
         if not self.has_clip:
