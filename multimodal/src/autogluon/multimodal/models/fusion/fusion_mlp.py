@@ -216,10 +216,10 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 detached_feature = multimodal_features.detach().clone()  # [bs, dim]
 
                 new, m, v = self.augmenter(detached_feature)
-                regularize_loss = self.augmenter.l2_regularize(detached_feature, new) # vae的重构损失。
+                regularize_loss = self.augmenter.l2_regularize(detached_feature, new)
                 KLD_loss = (
                     self.augmenter.kld(m, v) / new.size()[0] / self.aug_config.z_dim
-                ) # vae正则化损失。
+                )
 
                 with torch.no_grad():
                     ori_logits = self.head(self.fusion_mlp(detached_feature))
@@ -244,7 +244,7 @@ class MultimodalFusionMLP(AbstractMultimodalFusionModel):
                 )
                 multimodal_features = torch.cat(
                     [multimodal_features, after_augment], dim=0
-                ) # 这里两维
+                )
 
     
         features = self.fusion_mlp(multimodal_features)
